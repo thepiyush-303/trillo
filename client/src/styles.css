@@ -2623,3 +2623,147 @@ body {
   color: #579dff;
   text-decoration: underline;
 }
+
+.archived-search {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  margin-bottom: 18px;
+  padding: 0 10px;
+  color: #b6c2cf;
+  background: #2d2f33;
+  border: 1px solid #8c9bab;
+  border-radius: 5px;
+}
+
+.archived-search input {
+  min-width: 0;
+  color: #dcdfe4;
+  background: transparent;
+  border: 0;
+  outline: 0;
+}
+
+.archived-search input::placeholder {
+  color: #9fadbc;
+}
+
+
+/* Card action icons and board quick editor. */
+.card-action-svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.inbox-edit-button,
+.card-edit-button {
+  display: grid;
+  place-items: center;
+}
+
+.card-edit-button {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 26px;
+  height: 26px;
+  color: #b6c2cf;
+  background: rgba(34, 39, 43, 0.9);
+  border: 1px solid rgba(182, 194, 207, 0.45);
+  border-radius: 999px;
+  opacity: 0;
+  transform: translateX(6px);
+  transition: opacity 140ms ease, transform 140ms ease, background 140ms ease;
+  z-index: 4;
+}
+
+.card-edit-button:hover {
+  color: #ffffff;
+  background: #3c4149;
+}
+
+.board-card:hover .card-edit-button,
+.board-card:focus-within .card-edit-button {
+  opacity: 1;
+  transform: translateX(0);
+}
+
+.card-archive-button {
+  right: 40px;
+  border-radius: 999px;
+}
+
+.inbox-archive-button {
+  border-radius: 999px;
+}
+
+.board-card-editing {
+  position: relative;
+  display: block;
+  min-height: 84px;
+  padding: 0;
+  background: rgba(0, 0, 0, 0.72);
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.6);
+  z-index: 8;
+}
+
+.board-card-editing .label-row {
+  padding: 8px 10px 0;
+  background: #242629;
+  border-radius: 7px 7px 0 0;
+}
+
+.board-card-editing textarea {
+  width: 100%;
+  min-height: 74px;
+  padding: 10px 12px;
+  color: #dcdfe4;
+  background: #242629;
+  border: 0;
+  border-radius: 7px 7px 0 0;
+  outline: 0;
+  resize: vertical;
+}
+
+.board-card-editing .label-row + textarea {
+  border-radius: 0;
+}
+
+.board-quick-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.archived-modal-backdrop {
+  z-index: 140;
+}
+
+.inbox-card:not(:hover):not(:focus-within) .inbox-complete-dot.is-complete {
+  display: block;
+}
+
+.inbox-card:not(:hover):not(:focus-within):has(.inbox-complete-dot.is-complete) {
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+.inbox-complete-dot.is-complete {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.inbox-card:not(:hover):not(:focus-within) .inbox-complete-dot:not(.is-complete) {
+  display: none;
+}
+
+.board-card .board-complete-dot.is-complete {
+  opacity: 1;
+  transform: translateX(0) scale(1);
+}

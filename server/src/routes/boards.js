@@ -468,15 +468,24 @@ async function archiveCard(request, response) {
       [card.id, card.board_id, card.list_id, card.position]
     );
 
-    const result = await client.query(
+    await client.query(
       `update cards set archived = true, updated_at = now()
-       where id = $1 returning id, list_id, title, description, position, due_date, archived, labels`,
+       where id = $1`,
+      [card.id]
+    );
+
+    const archivedResult = await client.query(
+      `select cards.id, cards.list_id, cards.title, cards.description, cards.position, cards.due_date, cards.archived, cards.labels,
+              archived_cards.original_list_id, archived_cards.original_position, archived_cards.archived_at
+       from archived_cards
+       join cards on cards.id = archived_cards.card_id
+       where archived_cards.card_id = $1`,
       [card.id]
     );
 
     await client.query('commit');
 
-    response.json({ card: mapCard(result.rows[0]) });
+    response.json({ card: mapArchivedCard(archivedResult.rows[0]) });
   } catch (error) {
     await client.query('rollback');
     throw error;

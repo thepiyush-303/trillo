@@ -295,8 +295,14 @@ function readInboxWidth() {
 
 // Reads the drag payload stored by a draggable card.
 function readDragPayload(event) {
+  const payload = event.dataTransfer.getData('application/json') || event.dataTransfer.getData('text/plain');
+
+  if (!payload) {
+    return null;
+  }
+
   try {
-    return JSON.parse(event.dataTransfer.getData('application/json'));
+    return JSON.parse(payload);
   } catch (error) {
     return null;
   }
@@ -340,9 +346,42 @@ function replaceInboxCard(inboxCards, updatedCard) {
   return inboxCards.map((card) => (card.id === updatedCard.id ? { ...card, ...updatedCard } : card));
 }
 
+// Adds or replaces one archived card without duplicating it in the archive list.
+function upsertArchivedCard(archivedCards, archivedCard) {
+  return [archivedCard, ...archivedCards.filter((card) => String(card.id) !== String(archivedCard.id))];
+}
+
 // Replaces a temporary inbox id after the API creates the permanent inbox card.
 function replaceInboxCardById(inboxCards, temporaryId, createdCard) {
   return inboxCards.map((card) => (card.id === temporaryId ? hydrateInboxCards([{ ...createdCard, badges: [] }])[0] : card));
+}
+
+// Inserts one Inbox card before a target Inbox card or at the end.
+function insertInboxCard(inboxCards, card, targetInboxCardId = null) {
+  const insertIndex = targetInboxCardId
+    ? inboxCards.findIndex((item) => item.id === targetInboxCardId)
+    : inboxCards.length;
+  const safeIndex = insertIndex === -1 ? inboxCards.length : insertIndex;
+  const nextCards = [...inboxCards];
+  nextCards.splice(safeIndex, 0, card);
+  return nextCards;
+}
+
+// Resolves a label value that may be an Inbox label id or a board label object.
+function resolveCardLabel(label, labels) {
+  if (typeof label === 'string') {
+    return labels.find((item) => item.id === label) || { id: label, name: label, color: '#579dff' };
+  }
+
+  if (label && typeof label === 'object') {
+    return {
+      id: label.id || label.color || label.name,
+      name: label.name || '',
+      color: label.color || '#579dff'
+    };
+  }
+
+  return null;
 }
 
 // Moves an Inbox card before a target Inbox card or to the end.
@@ -420,6 +459,7 @@ function App() {
   useEffect(() => {
     skipCollapsedPersistRef.current = true;
     setCollapsedListIds(readCollapsedListIds(board.id));
+    loadArchivedBoardCards(board.id, setArchivedBoardCards, setStatus);
   }, [board.id]);
 
   useEffect(() => {
@@ -597,15 +637,7 @@ function App() {
   // Loads archived board cards from the API and opens the archive modal.
   async function handleArchivedBoardOpen() {
     setIsArchivedBoardOpen(true);
-
-    try {
-      if (!isLocalId(board.id)) {
-        const data = await apiRequest(`/boards/${board.id}/archived-cards`);
-        setArchivedBoardCards(data.cards || []);
-      }
-    } catch (error) {
-      setStatus('Could not load archived cards. Check the API connection.');
-    }
+    await loadArchivedBoardCards(board.id, setArchivedBoardCards, setStatus);
   }
 
   // Restores one archived board card back to its original list.
@@ -621,11 +653,13 @@ function App() {
     try {
       if (!isLocalId(cardId)) {
         const data = await apiRequest(`/cards/${cardId}/restore`, { method: 'PATCH' });
-        setBoard(addCardToList(board, data.card.listId, data.card));
+        setBoard((current) => addCardToList(current, data.card.listId, data.card));
         return;
       }
 
-      setBoard(addCardToList(board, archivedCard.listId, { ...archivedCard, archived: false }));
+      const targetListId = archivedCard.archive?.originalListId || archivedCard.listId;
+      const targetPosition = archivedCard.archive?.originalPosition || archivedCard.position;
+      setBoard((current) => addCardToList(current, targetListId, { ...archivedCard, listId: targetListId, position: targetPosition, archived: false }));
     } catch (error) {
       setArchivedBoardCards((cards) => [archivedCard, ...cards]);
       setStatus('Could not restore archived card. Check the API connection.');
@@ -664,15 +698,34 @@ function App() {
   // Archives a card locally and through the API when available.
   async function handleCardArchive(cardId) {
     const previousBoard = board;
+    const cardLocation = findCard(board, cardId);
+
+    if (!cardLocation) {
+      return;
+    }
+
+    const localArchivedCard = {
+      ...cardLocation.card,
+      archived: true,
+      archive: {
+        originalListId: cardLocation.listId,
+        originalPosition: cardLocation.card.position,
+        archivedAt: new Date().toISOString()
+      }
+    };
+
     setBoard(removeCard(board, cardId));
+    setArchivedBoardCards((cards) => upsertArchivedCard(cards, localArchivedCard));
     setSelectedCardId(null);
 
     try {
       if (!isLocalId(cardId)) {
-        await apiRequest(`/cards/${cardId}/archive`, { method: 'PATCH' });
+        const data = await apiRequest(`/cards/${cardId}/archive`, { method: 'PATCH' });
+        setArchivedBoardCards((cards) => upsertArchivedCard(cards, data.card));
       }
     } catch (error) {
       setBoard(previousBoard);
+      setArchivedBoardCards((cards) => cards.filter((card) => String(card.id) !== String(cardId)));
       setStatus('Could not archive card. Check the API connection.');
     }
   }
@@ -775,6 +828,61 @@ function App() {
     await handleInboxUpdate(inboxCardId, updates);
   }
 
+  // Moves a board card back into Inbox and removes it from its source list.
+  async function handleBoardCardToInbox(cardId, targetInboxCardId = null) {
+    const foundCard = findCard(board, cardId);
+
+    if (!foundCard) {
+      return;
+    }
+
+    const previousBoard = board;
+    const previousInboxCards = inboxCards;
+    const localInboxCard = {
+      id: createLocalId('inbox'),
+      title: foundCard.card.title,
+      description: foundCard.card.description || '',
+      badges: foundCard.card.badges || [],
+      labels: foundCard.card.labels || [],
+      completed: foundCard.card.completed || foundCard.card.done || false,
+      dueDate: foundCard.card.dueDate || '',
+      dueTime: foundCard.card.dueTime || '',
+      dueReminder: foundCard.card.dueReminder || '1 Day before',
+      dueRecurring: foundCard.card.dueRecurring || 'Never'
+    };
+
+    setBoard(removeCard(board, cardId));
+    setInboxCards((current) => insertInboxCard(current, localInboxCard, targetInboxCardId));
+    let createdInboxCard = null;
+
+    try {
+      if (!isLocalId(cardId)) {
+        const data = await apiRequest('/inbox-cards', {
+          method: 'POST',
+          body: JSON.stringify({
+            title: localInboxCard.title,
+            description: localInboxCard.description,
+            labels: localInboxCard.labels
+          })
+        });
+        createdInboxCard = hydrateInboxCards([data.inboxCard])[0];
+        setInboxCards((current) => replaceInboxCardById(current, localInboxCard.id, {
+          ...createdInboxCard,
+          badges: localInboxCard.badges,
+          completed: localInboxCard.completed,
+          dueDate: localInboxCard.dueDate,
+          dueTime: localInboxCard.dueTime,
+          dueReminder: localInboxCard.dueReminder,
+          dueRecurring: localInboxCard.dueRecurring
+        }));
+
+        await apiRequest(`/cards/${cardId}/archive`, { method: 'PATCH' });
+      }
+    } catch (error) {
+      setStatus('Card moved to Inbox locally, but the API save failed.');
+    }
+  }
+
   // Reorders Inbox cards locally and through the API when available.
   async function handleInboxDrop(draggedItem, targetInboxCardId = null) {
     if (!draggedItem) {
@@ -782,7 +890,7 @@ function App() {
     }
 
     if (draggedItem.type === 'board-card') {
-      await handleBoardCardToInbox(draggedItem.cardId);
+      await handleBoardCardToInbox(draggedItem.cardId, targetInboxCardId);
       return;
     }
 
@@ -933,43 +1041,6 @@ function App() {
     });
   }
 
-
-
-  // Moves one board card back into the Inbox and keeps its labels.
-  async function handleBoardCardToInbox(cardId) {
-    const cardLocation = findCard(board, cardId);
-
-    if (!cardLocation) {
-      return;
-    }
-
-    const previousBoard = board;
-    const previousInboxCards = inboxCards;
-    const sourceCard = cardLocation.card;
-    const localInboxCard = hydrateInboxCards([{
-      id: createLocalId('inbox'),
-      title: sourceCard.title,
-      description: sourceCard.description || '',
-      labels: (sourceCard.labels || []).map((label) => (typeof label === 'string' ? label : label.id)).filter(Boolean),
-      badges: [],
-      completed: sourceCard.completed || false
-    }])[0];
-
-    setBoard(removeCard(board, cardId));
-    setInboxCards((current) => [...current, localInboxCard]);
-
-    try {
-      if (!isLocalId(cardId)) {
-        const data = await apiRequest(`/cards/${cardId}/move-to-inbox`, { method: 'POST' });
-        setInboxCards((current) => replaceInboxCardById(current, localInboxCard.id, data.inboxCard));
-      }
-    } catch (error) {
-      setBoard(previousBoard);
-      setInboxCards(previousInboxCards);
-      setStatus('Could not move card back to Inbox. Check the API connection.');
-    }
-  }
-
   // Starts resizing the Inbox panel until the pointer is released.
   function handleInboxResizeStart(event) {
     event.preventDefault();
@@ -1085,9 +1156,11 @@ function App() {
             onCardCreate={handleCardCreate}
             onCardOpen={setSelectedCardId}
             onCardDrop={handleCardDrop}
+            onCardUpdate={handleCardUpdate}
             onCardCompleteToggle={handleCardCompleteToggle}
             onCardArchive={handleCardArchive}
             onArchivedCardsOpen={handleArchivedBoardOpen}
+            archivedCardsCount={archivedBoardCards.length}
             labels={inboxLabels}
             collapsedListIds={collapsedListIds}
           />
@@ -1153,6 +1226,21 @@ async function loadInitialBoard(setBoard, setStatus) {
     setStatus('Connected to API. Changes will persist when PostgreSQL is running.');
   } catch (error) {
     setStatus('Using local demo data until the API is connected.');
+  }
+}
+
+// Loads archived board cards from the API.
+async function loadArchivedBoardCards(boardId, setArchivedBoardCards, setStatus) {
+  if (isLocalId(boardId)) {
+    setArchivedBoardCards([]);
+    return;
+  }
+
+  try {
+    const data = await apiRequest(`/boards/${boardId}/archived-cards`);
+    setArchivedBoardCards(data.cards || []);
+  } catch (error) {
+    setStatus('Could not load archived cards. Check the API connection.');
   }
 }
 
@@ -1263,6 +1351,7 @@ function InboxPanel({
   // Allows Inbox cards to be dropped at the end of the Inbox.
   function handleInboxListDrop(event) {
     event.preventDefault();
+    event.stopPropagation();
     onInboxDrop(readDragPayload(event));
   }
 
@@ -1272,7 +1361,11 @@ function InboxPanel({
   }
 
   return (
-    <aside className={`inbox-panel inbox-background-${backgroundIndex}`}>
+    <aside
+      className={`inbox-panel inbox-background-${backgroundIndex}`}
+      onDragOver={(event) => event.preventDefault()}
+      onDrop={handleInboxListDrop}
+    >
       <div className="panel-title-row">
         <h2>Inbox</h2>
         <div className="panel-actions" ref={panelActionsRef}>
@@ -1491,8 +1584,10 @@ function InboxCard({
 
   // Stores the Inbox card drag payload for Inbox and board drop zones.
   function handleDragStart(event) {
+    const payload = JSON.stringify({ type: 'inbox-card', cardId: card.id });
     event.dataTransfer.effectAllowed = 'move';
-    event.dataTransfer.setData('application/json', JSON.stringify({ type: 'inbox-card', cardId: card.id }));
+    event.dataTransfer.setData('application/json', payload);
+    event.dataTransfer.setData('text/plain', payload);
   }
 
   // Drops another Inbox card before this card.
@@ -1513,9 +1608,9 @@ function InboxCard({
       <article className="inbox-card inbox-card-editing" ref={quickEditRef}>
         {card.labels?.length > 0 && (
           <div className="inbox-edit-label-strip">
-            {card.labels.map((labelId) => {
-              const label = labels.find((item) => item.id === labelId);
-              return label ? <span key={label.id} style={{ '--label-color': label.color }}>{label.name}</span> : null;
+            {card.labels.map((labelValue) => {
+              const label = resolveCardLabel(labelValue, labels);
+              return label ? <span key={label.id || label.color} style={{ '--label-color': label.color }}>{label.name}</span> : null;
             })}
           </div>
         )}
@@ -1525,7 +1620,7 @@ function InboxCard({
           <button onClick={() => onInboxOpen(card.id)}>▤ Open card</button>
           <button onClick={() => setIsLabelPanelOpen(true)}>🏷 Edit labels</button>
           <button onClick={() => setIsDatesPanelOpen(true)}>◷ Edit dates</button>
-          <button onClick={() => onInboxArchive(card.id)}>▱ Archive</button>
+          <button onClick={() => onInboxArchive(card.id)}><ArchiveCardIcon /> Archive</button>
         </div>
         {isLabelPanelOpen && (
           <LabelEditor
@@ -1569,9 +1664,9 @@ function InboxCard({
       <div className="inbox-card-main">
         {card.labels?.length > 0 && (
           <div className="inbox-label-strip">
-            {card.labels.map((labelId) => {
-              const label = labels.find((item) => item.id === labelId);
-              return label ? <span key={label.id} style={{ '--label-color': label.color }}>{label.name}</span> : null;
+            {card.labels.map((labelValue) => {
+              const label = resolveCardLabel(labelValue, labels);
+              return label ? <span key={label.id || label.color} style={{ '--label-color': label.color }}>{label.name}</span> : null;
             })}
           </div>
         )}
@@ -1589,10 +1684,10 @@ function InboxCard({
             onInboxArchive(card.id);
           }}
         >
-          ▱
+          <ArchiveCardIcon />
         </button>
       )}
-      <button className="inbox-edit-button" aria-label="Edit card" onClick={handleEditClick}>✎</button>
+      <button className="inbox-edit-button" aria-label="Edit card" onClick={handleEditClick}><EditCardIcon /></button>
     </article>
   );
 }
@@ -1856,9 +1951,11 @@ function Board({
   onCardCreate,
   onCardOpen,
   onCardDrop,
+  onCardUpdate,
   onCardCompleteToggle,
   onCardArchive,
   onArchivedCardsOpen,
+  archivedCardsCount,
   collapsedListIds
 }) {
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }));
@@ -1877,7 +1974,7 @@ function Board({
 
   return (
     <section className="board-shell">
-      <BoardHeader board={board} onBoardTitleChange={onBoardTitleChange} onArchivedCardsOpen={onArchivedCardsOpen} />
+      <BoardHeader board={board} onBoardTitleChange={onBoardTitleChange} onArchivedCardsOpen={onArchivedCardsOpen} archivedCardsCount={archivedCardsCount} />
       <div className="board-canvas">
         <p className="board-status">{status}</p>
         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
@@ -1894,6 +1991,7 @@ function Board({
                   onCardCreate={onCardCreate}
                   onCardOpen={onCardOpen}
                   onCardDrop={onCardDrop}
+                  onCardUpdate={onCardUpdate}
                   onCardCompleteToggle={onCardCompleteToggle}
                   onCardArchive={onCardArchive}
                   labels={labels}
@@ -1909,7 +2007,7 @@ function Board({
 }
 
 // Renders board title and board-level action controls.
-function BoardHeader({ board, onBoardTitleChange, onArchivedCardsOpen }) {
+function BoardHeader({ board, onBoardTitleChange, onArchivedCardsOpen, archivedCardsCount = 0 }) {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const menuRef = useRef(null);
 
@@ -1940,7 +2038,8 @@ function BoardHeader({ board, onBoardTitleChange, onArchivedCardsOpen }) {
   }, [isMenuOpen]);
 
   // Opens the archived card modal from the board menu.
-  function openArchivedCards() {
+  function openArchivedCards(event) {
+    event.stopPropagation();
     setIsMenuOpen(false);
     onArchivedCardsOpen();
   }
@@ -1956,7 +2055,7 @@ function BoardHeader({ board, onBoardTitleChange, onArchivedCardsOpen }) {
           <section className="board-menu-popover">
             <header><span>Menu</span><button onClick={() => setIsMenuOpen(false)}>×</button></header>
             <button>☷ Sort <span>›</span></button>
-            <button onClick={openArchivedCards}>▱ View archived cards</button>
+            <button type="button" onMouseDown={(event) => event.stopPropagation()} onClick={openArchivedCards}>▱ View archived cards <span>{archivedCardsCount}</span></button>
             <button>＋ Add from <span>›</span></button>
             <button>▣ Change background <span>›</span></button>
             <button>⚙ Settings <span>›</span></button>
@@ -2055,6 +2154,7 @@ function BoardList({
   onCardCreate,
   onCardOpen,
   onCardDrop,
+  onCardUpdate,
   onCardCompleteToggle,
   onCardArchive,
   labels
@@ -2139,7 +2239,7 @@ function BoardList({
         <>
           <div className="card-stack" onPointerDown={(event) => event.stopPropagation()}>
             {list.cards.map((card) => (
-              <BoardCard key={card.id} card={card} listId={list.id} labels={labels} onCardOpen={onCardOpen} onCardDrop={onCardDrop} onCardCompleteToggle={onCardCompleteToggle} onCardArchive={onCardArchive} />
+              <BoardCard key={card.id} card={card} listId={list.id} labels={labels} onCardOpen={onCardOpen} onCardDrop={onCardDrop} onCardUpdate={onCardUpdate} onCardCompleteToggle={onCardCompleteToggle} onCardArchive={onCardArchive} />
             ))}
           </div>
 
@@ -2228,11 +2328,47 @@ function AddCardForm({ listId, onCardCreate }) {
 }
 
 // Renders one compact card preview in a list.
-function BoardCard({ card, listId, labels, onCardOpen, onCardDrop, onCardCompleteToggle, onCardArchive }) {
-  // Stores the board card drag payload for list and card drop zones.
+function BoardCard({ card, listId, labels, onCardOpen, onCardDrop, onCardUpdate, onCardCompleteToggle, onCardArchive }) {
+  const [isQuickEditing, setIsQuickEditing] = useState(false);
+  const [draftTitle, setDraftTitle] = useState(card.title);
+  const quickEditRef = useRef(null);
+
+  useEffect(() => {
+    setDraftTitle(card.title);
+  }, [card.title]);
+
+  useEffect(() => {
+    if (!isQuickEditing) {
+      return undefined;
+    }
+
+    // Closes the board quick editor when the user clicks outside it or presses Escape.
+    function handleDismiss(event) {
+      if (event.key === 'Escape') {
+        setIsQuickEditing(false);
+        return;
+      }
+
+      if (event.type === 'mousedown' && !quickEditRef.current?.contains(event.target)) {
+        setIsQuickEditing(false);
+      }
+    }
+
+    document.addEventListener('mousedown', handleDismiss);
+    document.addEventListener('keydown', handleDismiss);
+
+    return () => {
+      document.removeEventListener('mousedown', handleDismiss);
+      document.removeEventListener('keydown', handleDismiss);
+    };
+  }, [isQuickEditing]);
+
+  // Stores the board card drag payload for list and Inbox drop zones.
   function handleDragStart(event) {
+    const payload = JSON.stringify({ type: 'board-card', cardId: card.id, listId });
     event.dataTransfer.effectAllowed = 'move';
-    event.dataTransfer.setData('application/json', JSON.stringify({ type: 'board-card', cardId: card.id, listId }));
+    event.dataTransfer.setData('application/json', payload);
+    event.dataTransfer.setData('text/plain', payload);
   }
 
   // Drops another draggable card before this card.
@@ -2248,38 +2384,76 @@ function BoardCard({ card, listId, labels, onCardOpen, onCardDrop, onCardComplet
     onCardCompleteToggle(card.id);
   }
 
-  // Archives a completed board card without opening the modal.
+  // Opens the board quick editor without opening the card modal.
+  function handleEditClick(event) {
+    event.stopPropagation();
+    setIsQuickEditing(true);
+  }
+
+  // Archives a board card without opening the modal.
   function handleArchiveClick(event) {
     event.stopPropagation();
     onCardArchive(card.id);
+  }
+
+  // Saves the board quick editor title when it is valid.
+  function saveQuickEdit() {
+    const nextTitle = draftTitle.trim();
+
+    if (!nextTitle) {
+      setDraftTitle(card.title);
+      setIsQuickEditing(false);
+      return;
+    }
+
+    if (nextTitle !== card.title) {
+      onCardUpdate(card.id, { title: nextTitle, description: card.description || '' });
+    }
+
+    setIsQuickEditing(false);
+  }
+
+  const cardLabels = card.labels?.length > 0 && (
+    <div className="label-row">
+      {card.labels.map((label) => {
+        const labelValue = resolveCardLabel(label, labels);
+        return labelValue ? (
+          <span
+            className={labelValue.name ? 'label-chip has-name' : 'label-chip'}
+            key={labelValue.id || labelValue.name || labelValue.color}
+            style={{ '--label-color': labelValue.color || '#579dff' }}
+            title={labelValue.name || 'Card label'}
+          >
+            {labelValue.name}
+          </span>
+        ) : null;
+      })}
+    </div>
+  );
+
+  if (isQuickEditing) {
+    return (
+      <article className="board-card board-card-editing" ref={quickEditRef}>
+        {cardLabels}
+        <textarea value={draftTitle} onChange={(event) => setDraftTitle(event.target.value)} autoFocus />
+        <button className="primary-action inbox-save-button" onClick={saveQuickEdit}>Save</button>
+        <div className="inbox-quick-menu board-quick-menu">
+          <button onClick={() => onCardOpen(card.id)}>▤ Open card</button>
+          <button onClick={handleArchiveClick}><ArchiveCardIcon /> Archive</button>
+        </div>
+      </article>
+    );
   }
 
   return (
     <article className="board-card draggable-card" draggable role="button" tabIndex="0" onPointerDown={(event) => event.stopPropagation()} onDragStart={handleDragStart} onDragOver={(event) => event.preventDefault()} onDrop={handleDrop} onClick={() => onCardOpen(card.id)} onKeyDown={(event) => event.key === 'Enter' && onCardOpen(card.id)}>
       <button className={card.completed || card.done ? 'board-complete-dot is-complete' : 'board-complete-dot'} aria-label="Mark complete" onClick={handleCompleteClick} />
       {(card.completed || card.done) && (
-        <button className="card-archive-button" aria-label="Archive card" onClick={handleArchiveClick}>▱</button>
+        <button className="card-archive-button" aria-label="Archive card" onClick={handleArchiveClick}><ArchiveCardIcon /></button>
       )}
+      <button className="card-edit-button" aria-label="Edit card" onClick={handleEditClick}><EditCardIcon /></button>
       {card.cover && <CardCover variant={card.cover} />}
-      {card.labels?.length > 0 && (
-        <div className="label-row">
-          {card.labels.map((label) => {
-            const labelValue = typeof label === 'string'
-              ? labels.find((item) => item.id === label) || { id: label, name: label, color: '#579dff' }
-              : label;
-            return (
-              <span
-                className={labelValue.name ? 'label-chip has-name' : 'label-chip'}
-                key={labelValue.id || labelValue.name || labelValue.color}
-                style={{ '--label-color': labelValue.color || '#579dff' }}
-                title={labelValue.name || 'Card label'}
-              >
-                {labelValue.name}
-              </span>
-            );
-          })}
-        </div>
-      )}
+      {cardLabels}
       <p className={card.completed || card.done ? 'card-title is-done' : 'card-title'}>{card.title}</p>
       {(card.description || card.badges || card.members) && (
         <div className="card-footer">
@@ -2302,6 +2476,9 @@ function BoardCard({ card, listId, labels, onCardOpen, onCardDrop, onCardComplet
 
 // Renders archived board cards with restore and delete actions.
 function ArchivedCardsModal({ cards, onClose, onRestore, onDelete }) {
+  const [search, setSearch] = useState('');
+  const visibleCards = cards.filter((card) => card.title.toLowerCase().includes(search.trim().toLowerCase()));
+
   useEffect(() => {
     // Closes the archived cards modal when the user presses Escape.
     function handleEscape(event) {
@@ -2319,13 +2496,17 @@ function ArchivedCardsModal({ cards, onClose, onRestore, onDelete }) {
     <div className="modal-backdrop archived-modal-backdrop" onMouseDown={onClose}>
       <section className="archived-cards-modal" onMouseDown={(event) => event.stopPropagation()}>
         <header>
-          <h2>Board - Archived Cards</h2>
+          <h2>Inbox - Archived Cards</h2>
           <button className="modal-close" onClick={onClose}>×</button>
         </header>
+        <label className="archived-search">
+          <span>⌕</span>
+          <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search archived cards" />
+        </label>
         <p className="archive-period">Past 7 days</p>
         <div className="archived-card-results">
-          {cards.length === 0 && <p className="empty-state">No archived cards.</p>}
-          {cards.map((card) => (
+          {visibleCards.length === 0 && <p className="empty-state">No archived cards.</p>}
+          {visibleCards.map((card) => (
             <article className="archived-card-item" key={card.id}>
               <p><span className="archived-check">✓</span>{card.title}</p>
               <small>▱ Archived</small>
@@ -2421,6 +2602,30 @@ function UserAvatar({ initials, color = '#6e5dc6', small = false }) {
     <span className={small ? 'user-avatar user-avatar-small' : 'user-avatar'} style={{ '--avatar-color': color }}>
       {initials}
     </span>
+  );
+}
+
+// Renders the card edit icon used by Inbox and board card hover controls.
+function EditCardIcon() {
+  return (
+    <svg className="card-action-svg" viewBox="0 0 18 18" aria-hidden="true" focusable="false">
+      <path d="M3.75 10.35v3.9h3.9" />
+      <path d="M6.9 13.1 14.05 5.95a1.4 1.4 0 0 0 0-1.98 1.4 1.4 0 0 0-1.98 0L4.92 11.12" />
+      <path d="m10.95 5.08 1.98 1.98" />
+      <path d="M4.2 3.15h6.15" />
+    </svg>
+  );
+}
+
+// Renders the archive icon used by card archive hover controls.
+function ArchiveCardIcon() {
+  return (
+    <svg className="card-action-svg" viewBox="0 0 18 18" aria-hidden="true" focusable="false">
+      <path d="M3.4 5.3h11.2" />
+      <path d="M4.45 5.3h9.1v8.05a1.2 1.2 0 0 1-1.2 1.2h-6.7a1.2 1.2 0 0 1-1.2-1.2Z" />
+      <path d="M6.6 3.25h4.8l.65 2.05h-6.1Z" />
+      <path d="M7.2 8.25h3.6" />
+    </svg>
   );
 }
 

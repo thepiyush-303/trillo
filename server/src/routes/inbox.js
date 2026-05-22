@@ -30,15 +30,31 @@ function mapInboxLabel(row) {
   };
 }
 
-// Reads a clean list of label ids from a request body.
-function readLabelIds(request) {
+// Reads clean label values from a request body.
+function readLabels(request) {
   const labels = request.body?.labels;
 
   if (!Array.isArray(labels)) {
     return [];
   }
 
-  return labels.map((labelId) => String(labelId)).filter(Boolean);
+  return labels
+    .map((label) => {
+      if (typeof label === 'string') {
+        return label;
+      }
+
+      if (label && typeof label === 'object') {
+        return {
+          id: String(label.id || label.color || '').trim(),
+          name: String(label.name || ''),
+          color: String(label.color || '#579dff')
+        };
+      }
+
+      return null;
+    })
+    .filter(Boolean);
 }
 
 // Creates a stable text id for newly created inbox labels.
@@ -105,10 +121,10 @@ async function createInboxCard(request, response) {
 
   const position = await getNextInboxPosition();
   const result = await pool.query(
-    `insert into inbox_cards (title, description, position)
-     values ($1, $2, $3)
+    `insert into inbox_cards (title, description, labels, position)
+     values ($1, $2, $3::jsonb, $4)
      returning id, title, description, position, labels, converted_card_id`,
-    [title, String(request.body?.description || ''), position]
+    [title, String(request.body?.description || ''), JSON.stringify(readLabels(request)), position]
   );
 
   response.status(201).json({ inboxCard: mapInboxCard(result.rows[0]) });
@@ -127,7 +143,7 @@ async function updateInboxCard(request, response) {
     `update inbox_cards set title = $1, description = $2, labels = $3::jsonb, updated_at = now()
      where id = $4 and converted_card_id is null
      returning id, title, description, position, labels, converted_card_id`,
-    [title, String(request.body?.description || ''), JSON.stringify(readLabelIds(request)), request.params.inboxCardId]
+    [title, String(request.body?.description || ''), JSON.stringify(readLabels(request)), request.params.inboxCardId]
   );
 
   if (result.rowCount === 0) {
