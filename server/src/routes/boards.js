@@ -40,7 +40,32 @@ function mapCard(row) {
     description: row.description,
     position: row.position,
     dueDate: row.due_date,
-    archived: row.archived
+    archived: row.archived,
+    labels: Array.isArray(row.labels) ? row.labels : []
+  };
+}
+
+// Converts an archived card row into the client archive shape.
+function mapArchivedCard(row) {
+  return {
+    ...mapCard(row),
+    archive: {
+      originalListId: row.original_list_id,
+      originalPosition: row.original_position,
+      archivedAt: row.archived_at
+    }
+  };
+}
+
+// Converts an inbox database row into the client inbox card shape.
+function mapInboxCard(row) {
+  return {
+    id: row.id,
+    title: row.title,
+    description: row.description,
+    position: row.position,
+    labels: Array.isArray(row.labels) ? row.labels : [],
+    convertedCardId: row.converted_card_id
   };
 }
 
@@ -79,6 +104,16 @@ async function updateCardPositions(client, listId, cardIds) {
   }
 }
 
+// Updates list order for one board using the provided list ids.
+async function updateListPositions(client, boardId, listIds) {
+  for (const [index, listId] of listIds.entries()) {
+    await client.query(
+      'update lists set position = $1, updated_at = now() where id = $2 and board_id = $3',
+      [(index + 1) * 1000, listId, boardId]
+    );
+  }
+}
+
 // Lists all available boards in creation order.
 async function getBoards(_request, response) {
   const result = await pool.query('select id, title from boards order by created_at asc');
@@ -113,14 +148,31 @@ async function getBoard(request, response) {
     [boardId]
   );
   const cardsResult = await pool.query(
-    `select cards.id, cards.list_id, cards.title, cards.description, cards.position, cards.due_date, cards.archived
+    `select cards.id, cards.list_id, cards.title, cards.description, cards.position, cards.due_date, cards.archived, cards.labels
      from cards
      join lists on lists.id = cards.list_id
      where lists.board_id = $1 and cards.archived = false
      order by cards.position asc, cards.id asc`,
     [boardId]
   );
+  const labelsResult = await pool.query(
+    `select card_labels.card_id, labels.id, labels.name, labels.color
+     from card_labels
+     join labels on labels.id = card_labels.label_id
+     join cards on cards.id = card_labels.card_id
+     join lists on lists.id = cards.list_id
+     where lists.board_id = $1
+     order by labels.id asc`,
+    [boardId]
+  );
   const membersResult = await pool.query('select id, name, avatar_color from members order by id asc limit 5');
+
+  const labelsByCardId = labelsResult.rows.reduce((labelsByCard, label) => {
+    const cardLabels = labelsByCard.get(label.card_id) || [];
+    cardLabels.push({ id: label.id, name: label.name, color: label.color });
+    labelsByCard.set(label.card_id, cardLabels);
+    return labelsByCard;
+  }, new Map());
 
   const board = mapBoard(boardResult.rows[0]);
   board.members = membersResult.rows.map((member) => ({
@@ -134,11 +186,66 @@ async function getBoard(request, response) {
     const list = board.lists.find((item) => item.id === card.listId);
 
     if (list) {
-      list.cards.push(card);
+      list.cards.push({ ...card, labels: [...(card.labels || []), ...(labelsByCardId.get(card.id) || [])] });
     }
   }
 
   response.json({ board });
+}
+
+// Lists archived cards for one board from the durable archive table.
+async function getArchivedCards(request, response) {
+  const result = await pool.query(
+    `select cards.id, cards.list_id, cards.title, cards.description, cards.position, cards.due_date, cards.archived, cards.labels,
+            archived_cards.original_list_id, archived_cards.original_position, archived_cards.archived_at
+     from archived_cards
+     join cards on cards.id = archived_cards.card_id
+     where archived_cards.board_id = $1
+     order by archived_cards.archived_at desc, archived_cards.card_id desc`,
+    [request.params.boardId]
+  );
+
+  response.json({ cards: result.rows.map(mapArchivedCard) });
+}
+
+// Restores one archived card back to the list and position captured at archive time.
+async function restoreCard(request, response) {
+  const client = await pool.connect();
+
+  try {
+    await client.query('begin');
+
+    const archiveResult = await client.query(
+      `select card_id, original_list_id, original_position
+       from archived_cards
+       where card_id = $1
+       for update`,
+      [request.params.cardId]
+    );
+
+    if (archiveResult.rowCount === 0) {
+      await client.query('rollback');
+      sendError(response, 404, 'Archived card not found.');
+      return;
+    }
+
+    const archive = archiveResult.rows[0];
+    const result = await client.query(
+      `update cards set archived = false, list_id = $1, position = $2, updated_at = now()
+       where id = $3 returning id, list_id, title, description, position, due_date, archived, labels`,
+      [archive.original_list_id, archive.original_position, archive.card_id]
+    );
+
+    await client.query('delete from archived_cards where card_id = $1', [archive.card_id]);
+    await client.query('commit');
+
+    response.json({ card: mapCard(result.rows[0]) });
+  } catch (error) {
+    await client.query('rollback');
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 // Updates a board title.
@@ -181,6 +288,30 @@ async function createList(request, response) {
   );
 
   response.status(201).json({ list: mapList(result.rows[0]) });
+}
+
+// Persists horizontal list ordering for one board.
+async function reorderLists(request, response) {
+  const { listIds = [] } = request.body || {};
+
+  if (!Array.isArray(listIds) || listIds.length === 0) {
+    sendError(response, 400, 'List id array is required.');
+    return;
+  }
+
+  const client = await pool.connect();
+
+  try {
+    await client.query('begin');
+    await updateListPositions(client, request.params.boardId, listIds);
+    await client.query('commit');
+    response.json({ ok: true });
+  } catch (error) {
+    await client.query('rollback');
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 // Updates a list title.
@@ -231,7 +362,7 @@ async function createCard(request, response) {
   const result = await pool.query(
     `insert into cards (list_id, title, position)
      values ($1, $2, $3)
-     returning id, list_id, title, description, position, due_date, archived`,
+     returning id, list_id, title, description, position, due_date, archived, labels`,
     [request.params.listId, title, position]
   );
 
@@ -279,7 +410,7 @@ async function updateCard(request, response) {
 
   const result = await pool.query(
     `update cards set title = $1, description = $2, updated_at = now()
-     where id = $3 returning id, list_id, title, description, position, due_date, archived`,
+     where id = $3 returning id, list_id, title, description, position, due_date, archived, labels`,
     [title, description, request.params.cardId]
   );
 
@@ -303,31 +434,112 @@ async function deleteCard(request, response) {
   response.status(204).end();
 }
 
-// Marks one card as archived so it no longer appears on the board.
+// Marks one card as archived and records its original board/list position.
 async function archiveCard(request, response) {
-  const result = await pool.query(
-    `update cards set archived = true, updated_at = now()
-     where id = $1 returning id, list_id, title, description, position, due_date, archived`,
-    [request.params.cardId]
-  );
+  const client = await pool.connect();
 
-  if (result.rowCount === 0) {
-    sendError(response, 404, 'Card not found.');
-    return;
+  try {
+    await client.query('begin');
+
+    const cardResult = await client.query(
+      `select cards.id, cards.list_id, cards.position, lists.board_id
+       from cards
+       join lists on lists.id = cards.list_id
+       where cards.id = $1
+       for update`,
+      [request.params.cardId]
+    );
+
+    if (cardResult.rowCount === 0) {
+      await client.query('rollback');
+      sendError(response, 404, 'Card not found.');
+      return;
+    }
+
+    const card = cardResult.rows[0];
+    await client.query(
+      `insert into archived_cards (card_id, board_id, original_list_id, original_position)
+       values ($1, $2, $3, $4)
+       on conflict (card_id) do update set
+         board_id = excluded.board_id,
+         original_list_id = excluded.original_list_id,
+         original_position = excluded.original_position,
+         archived_at = now()`,
+      [card.id, card.board_id, card.list_id, card.position]
+    );
+
+    const result = await client.query(
+      `update cards set archived = true, updated_at = now()
+       where id = $1 returning id, list_id, title, description, position, due_date, archived, labels`,
+      [card.id]
+    );
+
+    await client.query('commit');
+
+    response.json({ card: mapCard(result.rows[0]) });
+  } catch (error) {
+    await client.query('rollback');
+    throw error;
+  } finally {
+    client.release();
   }
+}
 
-  response.json({ card: mapCard(result.rows[0]) });
+// Moves a board card back into the Inbox while preserving Inbox-style labels.
+async function moveCardToInbox(request, response) {
+  const client = await pool.connect();
+
+  try {
+    await client.query('begin');
+
+    const cardResult = await client.query(
+      `select id, title, description, labels
+       from cards
+       where id = $1
+       for update`,
+      [request.params.cardId]
+    );
+
+    if (cardResult.rowCount === 0) {
+      await client.query('rollback');
+      sendError(response, 404, 'Card not found.');
+      return;
+    }
+
+    const positionResult = await client.query('select coalesce(max(position), 0) + 1000 as position from inbox_cards');
+    const card = cardResult.rows[0];
+    const inboxResult = await client.query(
+      `insert into inbox_cards (title, description, labels, position)
+       values ($1, $2, $3::jsonb, $4)
+       returning id, title, description, position, labels, converted_card_id`,
+      [card.title, card.description || '', JSON.stringify(Array.isArray(card.labels) ? card.labels : []), positionResult.rows[0].position]
+    );
+
+    await client.query('delete from cards where id = $1', [card.id]);
+    await client.query('commit');
+
+    response.status(201).json({ inboxCard: mapInboxCard(inboxResult.rows[0]) });
+  } catch (error) {
+    await client.query('rollback');
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 boardsRouter.get('/boards', getBoards);
 boardsRouter.post('/boards', createBoard);
 boardsRouter.get('/boards/:boardId', getBoard);
+boardsRouter.get('/boards/:boardId/archived-cards', getArchivedCards);
 boardsRouter.patch('/boards/:boardId', updateBoard);
 boardsRouter.post('/boards/:boardId/lists', createList);
+boardsRouter.patch('/boards/:boardId/lists/reorder', reorderLists);
 boardsRouter.patch('/lists/:listId', updateList);
 boardsRouter.delete('/lists/:listId', deleteList);
 boardsRouter.post('/lists/:listId/cards', createCard);
 boardsRouter.patch('/cards/reorder', reorderCards);
+boardsRouter.post('/cards/:cardId/move-to-inbox', moveCardToInbox);
 boardsRouter.patch('/cards/:cardId', updateCard);
 boardsRouter.delete('/cards/:cardId', deleteCard);
 boardsRouter.patch('/cards/:cardId/archive', archiveCard);
+boardsRouter.patch('/cards/:cardId/restore', restoreCard);

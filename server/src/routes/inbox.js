@@ -15,8 +15,35 @@ function mapInboxCard(row) {
     title: row.title,
     description: row.description,
     position: row.position,
+    labels: Array.isArray(row.labels) ? row.labels : [],
     convertedCardId: row.converted_card_id
   };
+}
+
+// Converts an inbox label row into the client label shape.
+function mapInboxLabel(row) {
+  return {
+    id: row.id,
+    name: row.name,
+    color: row.color,
+    position: row.position
+  };
+}
+
+// Reads a clean list of label ids from a request body.
+function readLabelIds(request) {
+  const labels = request.body?.labels;
+
+  if (!Array.isArray(labels)) {
+    return [];
+  }
+
+  return labels.map((labelId) => String(labelId)).filter(Boolean);
+}
+
+// Creates a stable text id for newly created inbox labels.
+function createLabelId() {
+  return `label-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
 // Converts a card database row into the client card shape.
@@ -28,7 +55,8 @@ function mapCard(row) {
     description: row.description,
     position: row.position,
     dueDate: row.due_date,
-    archived: row.archived
+    archived: row.archived,
+    labels: Array.isArray(row.labels) ? row.labels : []
   };
 }
 
@@ -57,7 +85,7 @@ async function getNextCardPosition(listId) {
 // Lists active inbox cards in saved order.
 async function getInboxCards(_request, response) {
   const result = await pool.query(
-    `select id, title, description, position, converted_card_id
+    `select id, title, description, position, labels, converted_card_id
      from inbox_cards
      where converted_card_id is null
      order by position asc, id asc`
@@ -79,14 +107,14 @@ async function createInboxCard(request, response) {
   const result = await pool.query(
     `insert into inbox_cards (title, description, position)
      values ($1, $2, $3)
-     returning id, title, description, position, converted_card_id`,
+     returning id, title, description, position, labels, converted_card_id`,
     [title, String(request.body?.description || ''), position]
   );
 
   response.status(201).json({ inboxCard: mapInboxCard(result.rows[0]) });
 }
 
-// Updates an inbox card title and description.
+// Updates an inbox card title, description, and selected labels.
 async function updateInboxCard(request, response) {
   const title = readTitle(request);
 
@@ -96,10 +124,10 @@ async function updateInboxCard(request, response) {
   }
 
   const result = await pool.query(
-    `update inbox_cards set title = $1, description = $2, updated_at = now()
-     where id = $3 and converted_card_id is null
-     returning id, title, description, position, converted_card_id`,
-    [title, String(request.body?.description || ''), request.params.inboxCardId]
+    `update inbox_cards set title = $1, description = $2, labels = $3::jsonb, updated_at = now()
+     where id = $4 and converted_card_id is null
+     returning id, title, description, position, labels, converted_card_id`,
+    [title, String(request.body?.description || ''), JSON.stringify(readLabelIds(request)), request.params.inboxCardId]
   );
 
   if (result.rowCount === 0) {
@@ -125,6 +153,25 @@ async function deleteInboxCard(request, response) {
   response.status(204).end();
 }
 
+// Persists Inbox card ordering using the provided inbox card ids.
+async function reorderInboxCards(request, response) {
+  const { inboxCardIds = [] } = request.body || {};
+
+  if (!Array.isArray(inboxCardIds)) {
+    sendError(response, 400, 'Inbox card id array is required.');
+    return;
+  }
+
+  for (const [index, inboxCardId] of inboxCardIds.entries()) {
+    await pool.query(
+      'update inbox_cards set position = $1, updated_at = now() where id = $2 and converted_card_id is null',
+      [(index + 1) * 1000, inboxCardId]
+    );
+  }
+
+  response.json({ ok: true });
+}
+
 // Converts an inbox card into a normal board card in the requested list.
 async function convertInboxCard(request, response) {
   const targetListId = request.body?.listId;
@@ -140,7 +187,7 @@ async function convertInboxCard(request, response) {
     await client.query('begin');
 
     const inboxResult = await client.query(
-      `select id, title, description
+      `select id, title, description, labels
        from inbox_cards
        where id = $1 and converted_card_id is null
        for update`,
@@ -159,10 +206,10 @@ async function convertInboxCard(request, response) {
     );
     const inboxCard = inboxResult.rows[0];
     const cardResult = await client.query(
-      `insert into cards (list_id, title, description, position)
-       values ($1, $2, $3, $4)
-       returning id, list_id, title, description, position, due_date, archived`,
-      [targetListId, inboxCard.title, inboxCard.description, positionResult.rows[0].position]
+      `insert into cards (list_id, title, description, labels, position)
+       values ($1, $2, $3, $4::jsonb, $5)
+       returning id, list_id, title, description, position, due_date, archived, labels`,
+      [targetListId, inboxCard.title, inboxCard.description, JSON.stringify(Array.isArray(inboxCard.labels) ? inboxCard.labels : []), positionResult.rows[0].position]
     );
 
     await client.query(
@@ -179,8 +226,73 @@ async function convertInboxCard(request, response) {
     client.release();
   }
 }
+// Lists available labels for Inbox cards.
+async function getInboxLabels(_request, response) {
+  const result = await pool.query(
+    `select id, name, color, position
+     from inbox_labels
+     order by position asc, created_at asc`
+  );
+
+  response.json({ labels: result.rows.map(mapInboxLabel) });
+}
+
+// Creates one available Inbox label with a unique color.
+async function createInboxLabel(request, response) {
+  const name = String(request.body?.name || '').trim();
+  const color = String(request.body?.color || '').trim();
+
+  if (!color) {
+    sendError(response, 400, 'Label color is required.');
+    return;
+  }
+
+  const positionResult = await pool.query('select coalesce(max(position), 0) + 1000 as position from inbox_labels');
+
+  try {
+    const result = await pool.query(
+      `insert into inbox_labels (id, name, color, position)
+       values ($1, $2, $3, $4)
+       returning id, name, color, position`,
+      [createLabelId(), name || 'New label', color, positionResult.rows[0].position]
+    );
+
+    response.status(201).json({ label: mapInboxLabel(result.rows[0]) });
+  } catch (error) {
+    if (error.code === '23505') {
+      sendError(response, 409, 'Label color is already used.');
+      return;
+    }
+
+    throw error;
+  }
+}
+
+// Renames one available Inbox label.
+async function updateInboxLabel(request, response) {
+  const name = String(request.body?.name || '').trim();
+
+  const result = await pool.query(
+    `update inbox_labels set name = $1, updated_at = now()
+     where id = $2
+     returning id, name, color, position`,
+    [name, request.params.labelId]
+  );
+
+  if (result.rowCount === 0) {
+    sendError(response, 404, 'Inbox label not found.');
+    return;
+  }
+
+  response.json({ label: mapInboxLabel(result.rows[0]) });
+}
+
+inboxRouter.get('/inbox-labels', getInboxLabels);
+inboxRouter.post('/inbox-labels', createInboxLabel);
+inboxRouter.patch('/inbox-labels/:labelId', updateInboxLabel);
 inboxRouter.get('/inbox-cards', getInboxCards);
 inboxRouter.post('/inbox-cards', createInboxCard);
 inboxRouter.patch('/inbox-cards/:inboxCardId', updateInboxCard);
 inboxRouter.delete('/inbox-cards/:inboxCardId', deleteInboxCard);
+inboxRouter.patch('/inbox-cards/reorder', reorderInboxCards);
 inboxRouter.post('/inbox-cards/:inboxCardId/convert', convertInboxCard);

@@ -31,22 +31,37 @@ async function seedDatabase() {
     const weekList = await insertList(boardId, 'This Week', 3000);
     const laterList = await insertList(boardId, 'Later', 4000);
 
-    await insertCard(todoList, 'New to Trello? Start here', 1000);
+    const startCard = await insertCard(todoList, 'New to Trello? Start here', 1000);
     await insertCard(todoList, 'Capture from email, Slack, and Teams', 2000);
     await insertCard(todayList, 'Eat by 8', 1000);
-    await insertCard(todayList, 'Start using Trello', 2000);
-    await insertCard(weekList, 'Plan the first project workflow', 1000);
+    const trelloCard = await insertCard(todayList, 'Start using Trello', 2000);
+    const projectCard = await insertCard(weekList, 'Plan the first project workflow', 1000);
     await insertCard(laterList, 'Review future feature ideas', 1000);
 
-    await pool.query(
+    const labels = await pool.query(
       `insert into labels (board_id, name, color)
        values
         ($1, 'Priority', '#f87168'),
         ($1, 'Design', '#9f8fef'),
         ($1, 'Backend', '#4bce97'),
         ($1, 'Frontend', '#579dff'),
-        ($1, 'Review', '#f5cd47')`,
+        ($1, 'Review', '#f5cd47')
+       returning id, name`,
       [boardId]
+    );
+    const labelByName = new Map(labels.rows.map((label) => [label.name, label.id]));
+
+    await pool.query(
+      `insert into card_labels (card_id, label_id)
+       values
+        ($1, $2),
+        ($3, $4),
+        ($5, $6)`,
+      [
+        startCard, labelByName.get('Design'),
+        trelloCard, labelByName.get('Priority'),
+        projectCard, labelByName.get('Frontend')
+      ]
     );
 
     await pool.query(
