@@ -1239,7 +1239,16 @@ function App() {
       title: inboxCard.title,
       description: inboxCard.description || '',
       labels: inboxCard.labels || [],
-      completed: inboxCard.completed || false
+      completed: inboxCard.completed || false,
+      dueDate: inboxCard.dueDate || '',
+      dueTime: inboxCard.dueTime || '',
+      isCompleted: Boolean(inboxCard.isCompleted || inboxCard.dueDateCompleted),
+      dueDateCompleted: Boolean(inboxCard.isCompleted || inboxCard.dueDateCompleted),
+      dueDateReminder: inboxCard.dueDateReminder || inboxCard.dueReminder || '1 Day before',
+      dueDateRecurring: inboxCard.dueDateRecurring || inboxCard.dueRecurring || 'Never',
+      dueReminder: inboxCard.dueDateReminder || inboxCard.dueReminder || '1 Day before',
+      dueRecurring: inboxCard.dueDateRecurring || inboxCard.dueRecurring || 'Never',
+      cover: inboxCard.cover || null
     };
 
     setBoard(addCardToList(board, listId, localCard));

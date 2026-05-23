@@ -3891,3 +3891,11 @@ body {
 .board-card.has-solid-cover .card-archive-button {
   top: 52px;
 }
+
+/* Make board card covers full-bleed despite the card body's left action padding. */
+.board-card.has-cover > .card-cover-solid,
+.board-card.has-cover > .card-cover-image,
+.board-card.has-cover > .card-cover {
+  width: calc(100% + 14px);
+  margin-left: -14px;
+}
