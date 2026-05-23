@@ -3585,3 +3585,308 @@ body {
 .due-date-editor-panel .date-input-row.due-date-input-row {
   grid-template-columns: 18px minmax(0, 1fr) minmax(104px, 130px);
 }
+
+/* Trello-style card detail modal. */
+.card-detail-backdrop {
+  place-items: center;
+  padding: 32px 18px;
+  background: rgba(0, 0, 0, 0.72);
+  z-index: 160;
+}
+
+.card-detail-modal {
+  position: relative;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: min(1080px, calc(100vw - 36px));
+  max-height: calc(100vh - 64px);
+  overflow: hidden;
+  color: #dcdfe4;
+  background: #1d2125;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 12px;
+  box-shadow: 0 28px 90px rgba(0, 0, 0, 0.58);
+}
+
+.card-detail-cover {
+  position: relative;
+  min-height: 112px;
+  background: #050607;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.card-detail-cover.has-cover {
+  min-height: 160px;
+}
+
+.card-detail-cover > .card-cover-image,
+.card-detail-cover > .card-cover-solid,
+.card-detail-cover > .card-cover {
+  height: 160px;
+  border-radius: 0;
+}
+
+.card-detail-context {
+  position: absolute;
+  top: 16px;
+  left: 24px;
+  margin: 0;
+  color: #dcdfe4;
+  background: rgba(9, 30, 66, 0.62);
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+.card-detail-top-actions {
+  position: absolute;
+  top: 14px;
+  right: 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.card-detail-icon-button,
+.card-detail-close {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  color: #dcdfe4;
+  background: rgba(69, 79, 91, 0.78);
+  border-radius: 50%;
+  font-size: 18px;
+}
+
+.card-detail-icon-button:hover,
+.card-detail-close:hover {
+  background: rgba(98, 111, 134, 0.95);
+}
+
+.card-detail-body {
+  min-height: 0;
+  overflow: auto;
+}
+
+.card-detail-main {
+  display: grid;
+  gap: 18px;
+  max-width: 650px;
+  padding: 26px 24px 28px;
+}
+
+.card-detail-title-row {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+}
+
+.card-detail-complete {
+  width: 17px;
+  height: 17px;
+  padding: 0;
+  background: transparent;
+  border: 2px solid #9fadbc;
+  border-radius: 50%;
+}
+
+.card-detail-complete.is-complete {
+  display: grid;
+  place-items: center;
+  color: #092f21;
+  background: #94c748;
+  border-color: #94c748;
+}
+
+.card-detail-complete.is-complete::before {
+  content: '✓';
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.card-detail-title-input {
+  min-width: 0;
+  height: 42px;
+  padding: 4px 8px;
+  color: #dcdfe4;
+  background: transparent;
+  border: 2px solid transparent;
+  border-radius: 5px;
+  font-size: 26px;
+  font-weight: 800;
+  outline: 0;
+}
+
+.card-detail-title-input:focus {
+  color: #172b4d;
+  background: #ffffff;
+  border-color: #85b8ff;
+}
+
+.card-detail-command-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-left: 34px;
+}
+
+.card-detail-command-row button {
+  min-height: 32px;
+  padding: 0 12px;
+  color: #dcdfe4;
+  background: transparent;
+  border: 1px solid rgba(182, 194, 207, 0.2);
+  border-radius: 5px;
+}
+
+.card-detail-command-row button:hover {
+  background: #3c4149;
+}
+
+.card-detail-label-picker {
+  width: min(320px, 100%);
+  margin-left: 34px;
+  padding: 10px;
+  background: #282e33;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.36);
+}
+
+.card-detail-label-option {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.card-detail-label-option span,
+.card-detail-label-row span {
+  min-height: 30px;
+  padding: 7px 10px;
+  color: #ffffff;
+  background: var(--label-color);
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.card-detail-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 24px;
+  padding-left: 34px;
+}
+
+.card-detail-fields h3 {
+  margin: 0 0 8px;
+  color: #b6c2cf;
+  font-size: 12px;
+}
+
+.card-detail-label-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.card-detail-label-row button {
+  width: 32px;
+  height: 30px;
+  color: #dcdfe4;
+  background: #282e33;
+  border: 1px solid rgba(182, 194, 207, 0.18);
+  border-radius: 5px;
+  font-size: 18px;
+}
+
+.card-detail-description {
+  display: grid;
+  gap: 10px;
+  padding-left: 34px;
+}
+
+.card-detail-description span {
+  color: #dcdfe4;
+  font-size: 16px;
+  font-weight: 800;
+}
+
+.card-detail-description textarea {
+  width: 100%;
+  min-height: 92px;
+  padding: 12px;
+  color: #dcdfe4;
+  background: #22272b;
+  border: 1px solid #738496;
+  border-radius: 4px;
+  outline: 0;
+  resize: vertical;
+}
+
+.card-detail-description textarea:focus {
+  border-color: #85b8ff;
+}
+
+.card-detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-left: 34px;
+}
+
+.card-detail-modal .cover-editor-backdrop,
+.card-detail-modal .due-date-editor.modal-backdrop {
+  z-index: 190;
+}
+
+@media (max-width: 760px) {
+  .card-detail-backdrop {
+    align-items: start;
+    padding: 12px;
+  }
+
+  .card-detail-modal {
+    width: calc(100vw - 24px);
+    max-height: calc(100vh - 24px);
+  }
+
+  .card-detail-main {
+    padding: 20px 14px 22px;
+  }
+
+  .card-detail-command-row,
+  .card-detail-fields,
+  .card-detail-description,
+  .card-detail-actions,
+  .card-detail-label-picker {
+    margin-left: 0;
+    padding-left: 0;
+  }
+
+  .card-detail-title-input {
+    font-size: 21px;
+  }
+}
+
+/* Keep board card controls below the cover, aligned with the card body. */
+.board-card.has-image-cover .board-complete-dot {
+  top: 104px;
+}
+
+.board-card.has-image-cover .card-edit-button,
+.board-card.has-image-cover .card-archive-button {
+  top: 100px;
+}
+
+.board-card.has-solid-cover .board-complete-dot {
+  top: 56px;
+}
+
+.board-card.has-solid-cover .card-edit-button,
+.board-card.has-solid-cover .card-archive-button {
+  top: 52px;
+}
