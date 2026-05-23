@@ -3397,7 +3397,8 @@ body {
 
 .inbox-card.has-cover .inbox-edit-button,
 .inbox-card.has-cover .inbox-archive-button {
-  top: 8px;
+  top: auto;
+  bottom: 10px;
 }
 
 .inbox-card.has-cover .inbox-card-main {
