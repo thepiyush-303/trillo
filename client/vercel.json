@@ -2,7 +2,7 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "https://trillo-bqx1.onrender.com/api/*"
+      "destination": "https://trillo-bqx1.onrender.com/api/:path*"
     }
   ]
 }

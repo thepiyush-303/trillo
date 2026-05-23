@@ -5,7 +5,10 @@ dotenv.config();
 function parseCsv(value, fallback) {
   const values = value
     ?.split(",")
-    .map((item) => item.trim())
+    .map((item) => {
+      let url = item.trim();
+      return url.endsWith("/") ? url.slice(0, -1) : url;
+    })
     .filter(Boolean);
 
   return values?.length ? values : fallback;
