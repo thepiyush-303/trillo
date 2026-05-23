@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   DndContext,
   PointerSensor,
@@ -12,10 +13,39 @@ import {
   useSortable
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
+import CardCoverDisplay from './components/CardCoverDisplay.jsx';
+import CardCoverEditor from './components/CardCoverEditor.jsx';
+import DueDateBadge from './components/DueDateBadge.jsx';
+import DueDateEditor from './components/DueDateEditor.jsx';
+
+const DEFAULT_BOARD_BACKGROUND = {
+  type: 'color',
+  value: 'linear-gradient(135deg, #4b3b78 0%, #854c89 100%)'
+};
+
+const boardBackgroundPhotoOptions = [
+  { id: 'snowfield', label: 'Snow field', url: 'https://images.unsplash.com/photo-1483664852095-d6cc6870702d?auto=format&fit=crop&w=1400&q=80' },
+  { id: 'iceberg', label: 'Iceberg', url: 'https://images.unsplash.com/photo-1517783999520-f068d7431a60?auto=format&fit=crop&w=1400&q=80' },
+  { id: 'starscape', label: 'Starscape', url: 'https://images.unsplash.com/photo-1462331940025-496dfbfc7564?auto=format&fit=crop&w=1400&q=80' },
+  { id: 'mountain', label: 'Mountain', url: 'https://images.unsplash.com/photo-1500534314209-a25ddb2bd429?auto=format&fit=crop&w=1400&q=80' },
+  { id: 'coast', label: 'Coast', url: 'https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&w=1400&q=80' },
+  { id: 'forest', label: 'Forest', url: 'https://images.unsplash.com/photo-1441974231531-c6227db76b6e?auto=format&fit=crop&w=1400&q=80' }
+];
+
+const boardBackgroundColorOptions = [
+  'linear-gradient(135deg, #17345a 0%, #0c536b 100%)',
+  'linear-gradient(135deg, #0c66e4 0%, #6cc3e0 100%)',
+  'linear-gradient(135deg, #5e4db2 0%, #c9377c 100%)',
+  'linear-gradient(135deg, #8f3f65 0%, #f87168 100%)',
+  'linear-gradient(135deg, #1f845a 0%, #6cc3e0 100%)',
+  'linear-gradient(135deg, #946f00 0%, #f18d13 100%)',
+  '#0c66e4', '#1f845a', '#946f00', '#ae2e24', '#5e4db2', '#c9377c', '#0c536b', '#626f86'
+];
 
 const DEMO_BOARD = {
   id: 'demo-board',
   title: 'My Trello board',
+  background: DEFAULT_BOARD_BACKGROUND,
   members: [
     { id: 1, initials: 'PB', color: '#7c5cff' },
     { id: 2, initials: 'AM', color: '#22a06b' }
@@ -82,6 +112,7 @@ const DEMO_INBOX_CARDS = [
 ];
 
 const listAccents = ['#55326f', '#5e4900', '#14583b', '#111600', '#164555', '#4c2f22'];
+const listColorOptions = ['#1f845a', '#946f00', '#b65c02', '#ae2e24', '#8f3fba', '#0c66e4', '#1d7f8c', '#4c6b1f', '#943d73', '#626f86'];
 const labelColorPalette = [
   '#1f845a', '#946f00', '#b65c02', '#7f241d', '#8f3fba',
   '#216e4e', '#7f5f01', '#a54800', '#ae2e24', '#6e2f99',
@@ -133,6 +164,7 @@ function isLocalId(id) {
 function hydrateBoard(rawBoard) {
   return {
     ...rawBoard,
+    background: rawBoard.background || DEFAULT_BOARD_BACKGROUND,
     members: rawBoard.members?.length ? rawBoard.members : DEMO_BOARD.members,
     lists: rawBoard.lists.map((list, index) => ({
       ...list,
@@ -150,8 +182,13 @@ function hydrateInboxCards(rawInboxCards) {
     labels: Array.isArray(card.labels) ? card.labels : [],
     dueDate: card.dueDate || '',
     dueTime: card.dueTime || '',
-    dueReminder: card.dueReminder || '1 Day before',
-    dueRecurring: card.dueRecurring || 'Never'
+    isCompleted: Boolean(card.isCompleted || card.dueDateCompleted),
+    dueDateCompleted: Boolean(card.isCompleted || card.dueDateCompleted),
+    dueDateReminder: card.dueDateReminder || card.dueReminder || '1 Day before',
+    dueDateRecurring: card.dueDateRecurring || card.dueRecurring || 'Never',
+    dueReminder: card.dueDateReminder || card.dueReminder || '1 Day before',
+    dueRecurring: card.dueDateRecurring || card.dueRecurring || 'Never',
+    cover: card.cover || null
   }));
 }
 
@@ -293,6 +330,27 @@ function readInboxWidth() {
   }
 }
 
+// Converts a saved board background into inline CSS for the board shell.
+function getBoardBackgroundStyle(background) {
+  if (!background || typeof background !== 'object') {
+    return undefined;
+  }
+
+  if (background.type === 'image' && background.url) {
+    return {
+      backgroundImage: 'linear-gradient(rgba(0, 0, 0, 0.14), rgba(0, 0, 0, 0.2)), url("' + background.url + '")',
+      backgroundPosition: background.position || 'center',
+      backgroundSize: 'cover'
+    };
+  }
+
+  if (background.type === 'color' && background.value) {
+    return { background: background.value };
+  }
+
+  return undefined;
+}
+
 // Reads the drag payload stored by a draggable card.
 function readDragPayload(event) {
   const payload = event.dataTransfer.getData('application/json') || event.dataTransfer.getData('text/plain');
@@ -349,6 +407,14 @@ function replaceInboxCard(inboxCards, updatedCard) {
 // Adds or replaces one archived card without duplicating it in the archive list.
 function upsertArchivedCard(archivedCards, archivedCard) {
   return [archivedCard, ...archivedCards.filter((card) => String(card.id) !== String(archivedCard.id))];
+}
+
+// Merges API archive results without dropping cards archived optimistically in the UI.
+function mergeArchivedCards(loadedCards, existingCards = []) {
+  const loadedIds = new Set(loadedCards.map((card) => String(card.id)));
+  const optimisticCards = existingCards.filter((card) => !loadedIds.has(String(card.id)));
+
+  return [...optimisticCards, ...loadedCards];
 }
 
 // Replaces a temporary inbox id after the API creates the permanent inbox card.
@@ -503,6 +569,25 @@ function App() {
     }
   }
 
+  // Saves the selected board background locally and through the API when available.
+  async function handleBoardBackgroundChange(background) {
+    const previousBoard = board;
+    setBoard({ ...board, background });
+
+    try {
+      if (!isLocalId(board.id)) {
+        const data = await apiRequest('/boards/' + board.id + '/background', {
+          method: 'PATCH',
+          body: JSON.stringify({ background })
+        });
+        setBoard((current) => ({ ...current, background: data.board.background || background }));
+      }
+    } catch (error) {
+      setBoard(previousBoard);
+      setStatus('Could not save board background. Check the API connection.');
+    }
+  }
+
   // Adds a new list locally and through the API when available.
   async function handleListCreate(title) {
     const localList = {
@@ -529,24 +614,25 @@ function App() {
     }
   }
 
-  // Renames a list locally and through the API when available.
-  async function handleListUpdate(listId, title) {
+  // Updates a list locally and persists title changes through the API when available.
+  async function handleListUpdate(listId, updates) {
     const previousBoard = board;
+    const normalizedUpdates = typeof updates === 'string' ? { title: updates } : updates;
     setBoard({
       ...board,
-      lists: board.lists.map((list) => (list.id === listId ? { ...list, title } : list))
+      lists: board.lists.map((list) => (list.id === listId ? { ...list, ...normalizedUpdates } : list))
     });
 
     try {
-      if (!isLocalId(listId)) {
+      if (!isLocalId(listId) && Object.prototype.hasOwnProperty.call(normalizedUpdates, 'title')) {
         await apiRequest(`/lists/${listId}`, {
           method: 'PATCH',
-          body: JSON.stringify({ title })
+          body: JSON.stringify({ title: normalizedUpdates.title })
         });
       }
     } catch (error) {
       setBoard(previousBoard);
-      setStatus('Could not save list title. Check the API connection.');
+      setStatus('Could not save list changes. Check the API connection.');
     }
   }
 
@@ -563,6 +649,117 @@ function App() {
       setBoard(previousBoard);
       setStatus('Could not delete list. Check the API connection.');
     }
+  }
+
+  // Creates a local copy of a list and its cards next to the original.
+  function handleListDuplicate(listId) {
+    const sourceIndex = board.lists.findIndex((list) => list.id === listId);
+
+    if (sourceIndex === -1) {
+      return;
+    }
+
+    const sourceList = board.lists[sourceIndex];
+    const copiedList = {
+      ...sourceList,
+      id: createLocalId('list'),
+      title: `${sourceList.title} copy`,
+      cards: sourceList.cards.map((card) => ({ ...card, id: createLocalId('card') }))
+    };
+    const nextLists = [...board.lists];
+    nextLists.splice(sourceIndex + 1, 0, copiedList);
+    setBoard({ ...board, lists: nextLists });
+    setStatus('List copied locally.');
+  }
+
+  // Moves a list one position to the right, matching Trello's quick move behavior.
+  function handleListMoveRight(listId) {
+    const sourceIndex = board.lists.findIndex((list) => list.id === listId);
+
+    if (sourceIndex === -1 || sourceIndex === board.lists.length - 1) {
+      return;
+    }
+
+    handleListReorder(listId, board.lists[sourceIndex + 1].id);
+  }
+
+  // Sorts cards inside a list by the selected criterion.
+  function handleListSort(listId, sortMode = 'title') {
+    setBoard((current) => ({
+      ...current,
+      lists: current.lists.map((list) => {
+        if (list.id !== listId) {
+          return list;
+        }
+
+        const cards = [...list.cards].sort((first, second) => {
+          if (sortMode === 'completed') {
+            return Number(Boolean(second.completed || second.done)) - Number(Boolean(first.completed || first.done));
+          }
+
+          return first.title.localeCompare(second.title, undefined, { sensitivity: 'base' });
+        });
+
+        return { ...list, cards };
+      })
+    }));
+  }
+
+  // Moves all cards from a list into the next list to the right.
+  function handleListMoveCardsRight(listId) {
+    const sourceIndex = board.lists.findIndex((list) => list.id === listId);
+
+    if (sourceIndex === -1 || sourceIndex === board.lists.length - 1) {
+      setStatus('There is no list to the right to move cards into.');
+      return;
+    }
+
+    const sourceList = board.lists[sourceIndex];
+
+    if (sourceList.cards.length === 0) {
+      return;
+    }
+
+    const targetList = board.lists[sourceIndex + 1];
+    setBoard({
+      ...board,
+      lists: board.lists.map((list) => {
+        if (list.id === sourceList.id) {
+          return { ...list, cards: [] };
+        }
+
+        if (list.id === targetList.id) {
+          return { ...list, cards: [...list.cards, ...sourceList.cards.map((card) => ({ ...card, listId: targetList.id }))] };
+        }
+
+        return list;
+      })
+    });
+  }
+
+  // Archives all cards in a list locally and keeps them restorable from the archive modal.
+  function handleListArchiveCards(listId) {
+    const sourceList = board.lists.find((list) => list.id === listId);
+
+    if (!sourceList || sourceList.cards.length === 0) {
+      return;
+    }
+
+    const archivedCards = sourceList.cards.map((card) => ({
+      ...card,
+      archived: true,
+      archive: {
+        originalListId: listId,
+        originalPosition: card.position,
+        archivedAt: new Date().toISOString()
+      }
+    }));
+
+    setArchivedBoardCards((cards) => archivedCards.reduce((nextCards, card) => upsertArchivedCard(nextCards, card), cards));
+    setBoard({
+      ...board,
+      lists: board.lists.map((list) => (list.id === listId ? { ...list, cards: [] } : list))
+    });
   }
 
   // Toggles a list between the expanded and collapsed Trello-style states.
@@ -624,7 +821,16 @@ function App() {
       if (!isLocalId(cardId)) {
         const data = await apiRequest(`/cards/${cardId}`, {
           method: 'PATCH',
-          body: JSON.stringify({ title: updatedCard.title, description: updatedCard.description })
+          body: JSON.stringify({
+            title: updatedCard.title,
+            description: updatedCard.description || '',
+            dueDate: updatedCard.dueDate || '',
+            dueTime: updatedCard.dueTime || '',
+            dueDateCompleted: Boolean(updatedCard.isCompleted || updatedCard.dueDateCompleted),
+            dueDateReminder: updatedCard.dueDateReminder || updatedCard.dueReminder || '1 Day before',
+            dueDateRecurring: updatedCard.dueDateRecurring || updatedCard.dueRecurring || 'Never',
+            cover: updatedCard.cover || null
+          })
         });
         setBoard((current) => replaceCard(current, data.card));
       }
@@ -775,8 +981,14 @@ function App() {
           method: 'PATCH',
           body: JSON.stringify({
             title: updatedCard.title,
-            description: updatedCard.description,
-            labels: updatedCard.labels || []
+            description: updatedCard.description || '',
+            labels: updatedCard.labels || [],
+            dueDate: updatedCard.dueDate || '',
+            dueTime: updatedCard.dueTime || '',
+            dueDateCompleted: Boolean(updatedCard.isCompleted || updatedCard.dueDateCompleted),
+            dueDateReminder: updatedCard.dueDateReminder || updatedCard.dueReminder || '1 Day before',
+            dueDateRecurring: updatedCard.dueDateRecurring || updatedCard.dueRecurring || 'Never',
+            cover: updatedCard.cover || null
           })
         });
         const savedCard = hydrateInboxCards([data.inboxCard])[0];
@@ -786,8 +998,13 @@ function App() {
           completed: updatedCard.completed || false,
           dueDate: updatedCard.dueDate || '',
           dueTime: updatedCard.dueTime || '',
-          dueReminder: updatedCard.dueReminder || '1 Day before',
-          dueRecurring: updatedCard.dueRecurring || 'Never'
+          isCompleted: Boolean(updatedCard.isCompleted || updatedCard.dueDateCompleted),
+          dueDateCompleted: Boolean(updatedCard.isCompleted || updatedCard.dueDateCompleted),
+          dueDateReminder: updatedCard.dueDateReminder || updatedCard.dueReminder || '1 Day before',
+          dueDateRecurring: updatedCard.dueDateRecurring || updatedCard.dueRecurring || 'Never',
+          dueReminder: updatedCard.dueDateReminder || updatedCard.dueReminder || '1 Day before',
+          dueRecurring: updatedCard.dueDateRecurring || updatedCard.dueRecurring || 'Never',
+          cover: updatedCard.cover || null
         }));
       }
     } catch (error) {
@@ -847,8 +1064,13 @@ function App() {
       completed: foundCard.card.completed || foundCard.card.done || false,
       dueDate: foundCard.card.dueDate || '',
       dueTime: foundCard.card.dueTime || '',
-      dueReminder: foundCard.card.dueReminder || '1 Day before',
-      dueRecurring: foundCard.card.dueRecurring || 'Never'
+      isCompleted: Boolean(foundCard.card.isCompleted || foundCard.card.dueDateCompleted),
+      dueDateCompleted: Boolean(foundCard.card.isCompleted || foundCard.card.dueDateCompleted),
+      dueDateReminder: foundCard.card.dueDateReminder || foundCard.card.dueReminder || '1 Day before',
+      dueDateRecurring: foundCard.card.dueDateRecurring || foundCard.card.dueRecurring || 'Never',
+      dueReminder: foundCard.card.dueDateReminder || foundCard.card.dueReminder || '1 Day before',
+      dueRecurring: foundCard.card.dueDateRecurring || foundCard.card.dueRecurring || 'Never',
+      cover: foundCard.card.cover || null
     };
 
     setBoard(removeCard(board, cardId));
@@ -872,8 +1094,13 @@ function App() {
           completed: localInboxCard.completed,
           dueDate: localInboxCard.dueDate,
           dueTime: localInboxCard.dueTime,
+          isCompleted: localInboxCard.isCompleted,
+          dueDateCompleted: localInboxCard.dueDateCompleted,
+          dueDateReminder: localInboxCard.dueDateReminder,
+          dueDateRecurring: localInboxCard.dueDateRecurring,
           dueReminder: localInboxCard.dueReminder,
-          dueRecurring: localInboxCard.dueRecurring
+          dueRecurring: localInboxCard.dueRecurring,
+          cover: localInboxCard.cover
         }));
 
         await apiRequest(`/cards/${cardId}/archive`, { method: 'PATCH' });
@@ -1148,9 +1375,15 @@ function App() {
             board={board}
             status={status}
             onBoardTitleChange={handleBoardTitleChange}
+            onBoardBackgroundChange={handleBoardBackgroundChange}
             onListCreate={handleListCreate}
             onListUpdate={handleListUpdate}
             onListDelete={handleListDelete}
+            onListDuplicate={handleListDuplicate}
+            onListMoveRight={handleListMoveRight}
+            onListSort={handleListSort}
+            onListMoveCardsRight={handleListMoveCardsRight}
+            onListArchiveCards={handleListArchiveCards}
             onListCollapseToggle={handleListCollapseToggle}
             onListReorder={handleListReorder}
             onCardCreate={handleCardCreate}
@@ -1232,13 +1465,12 @@ async function loadInitialBoard(setBoard, setStatus) {
 // Loads archived board cards from the API.
 async function loadArchivedBoardCards(boardId, setArchivedBoardCards, setStatus) {
   if (isLocalId(boardId)) {
-    setArchivedBoardCards([]);
     return;
   }
 
   try {
     const data = await apiRequest(`/boards/${boardId}/archived-cards`);
-    setArchivedBoardCards(data.cards || []);
+    setArchivedBoardCards((current) => mergeArchivedCards(data.cards || [], current));
   } catch (error) {
     setStatus('Could not load archived cards. Check the API connection.');
   }
@@ -1531,6 +1763,7 @@ function InboxCard({
 }) {
   const [isQuickEditing, setIsQuickEditing] = useState(false);
   const [isLabelPanelOpen, setIsLabelPanelOpen] = useState(false);
+  const [isCoverPanelOpen, setIsCoverPanelOpen] = useState(false);
   const [isDatesPanelOpen, setIsDatesPanelOpen] = useState(false);
   const [draftTitle, setDraftTitle] = useState(card.title);
   const quickEditRef = useRef(null);
@@ -1603,92 +1836,145 @@ function InboxCard({
     setIsQuickEditing(true);
   }
 
+  // Saves a selected cover on this Inbox card.
+  function handleCoverSave(cover) {
+    onInboxUpdate(card.id, { cover });
+  }
+
+  // Removes the cover from this Inbox card.
+  function handleCoverRemove() {
+    onInboxUpdate(card.id, { cover: null });
+  }
+
+  // Saves due date fields from the shared date editor.
+  function handleDueDateSave(dateData) {
+    onInboxUpdate(card.id, {
+      ...dateData,
+      dueDateCompleted: Boolean(dateData.isCompleted),
+      dueReminder: dateData.dueDateReminder,
+      dueRecurring: dateData.dueDateRecurring
+    });
+  }
+
+  // Clears due date fields from the Inbox card.
+  function handleDueDateRemove() {
+    onInboxUpdate(card.id, {
+      dueDate: '',
+      dueTime: '',
+      isCompleted: false,
+      dueDateCompleted: false,
+      dueDateReminder: '1 Day before',
+      dueDateRecurring: 'Never',
+      dueReminder: '1 Day before',
+      dueRecurring: 'Never'
+    });
+  }
+
+  const dueDateCard = { ...card, isCompleted: Boolean(card.isCompleted || card.dueDateCompleted) };
+  const cardCover = typeof card.cover === 'object' ? card.cover : null;
+
   if (isQuickEditing) {
     return (
-      <article className="inbox-card inbox-card-editing" ref={quickEditRef}>
-        {card.labels?.length > 0 && (
-          <div className="inbox-edit-label-strip">
-            {card.labels.map((labelValue) => {
-              const label = resolveCardLabel(labelValue, labels);
-              return label ? <span key={label.id || label.color} style={{ '--label-color': label.color }}>{label.name}</span> : null;
-            })}
+      <>
+        <article className="inbox-card inbox-card-editing" ref={quickEditRef}>
+          {cardCover && <CardCoverDisplay cover={cardCover} />}
+          {card.labels?.length > 0 && (
+            <div className="inbox-edit-label-strip">
+              {card.labels.map((labelValue) => {
+                const label = resolveCardLabel(labelValue, labels);
+                return label ? <span key={label.id || label.color} style={{ '--label-color': label.color }}>{label.name}</span> : null;
+              })}
+            </div>
+          )}
+          <textarea value={draftTitle} onChange={(event) => setDraftTitle(event.target.value)} autoFocus />
+          <button className="primary-action inbox-save-button" onClick={saveQuickEdit}>Save</button>
+          <div className="inbox-quick-menu">
+            <button onClick={() => onInboxOpen(card.id)}>▤ Open card</button>
+            <button onClick={() => setIsLabelPanelOpen(true)}>🏷 Edit labels</button>
+            <button onClick={() => setIsCoverPanelOpen(true)}>▧ Change cover</button>
+            <button onClick={() => setIsDatesPanelOpen(true)}>◷ Edit dates</button>
+            <button onClick={() => onInboxArchive(card.id)}><ArchiveCardIcon /> Archive</button>
           </div>
-        )}
-        <textarea value={draftTitle} onChange={(event) => setDraftTitle(event.target.value)} autoFocus />
-        <button className="primary-action inbox-save-button" onClick={saveQuickEdit}>Save</button>
-        <div className="inbox-quick-menu">
-          <button onClick={() => onInboxOpen(card.id)}>▤ Open card</button>
-          <button onClick={() => setIsLabelPanelOpen(true)}>🏷 Edit labels</button>
-          <button onClick={() => setIsDatesPanelOpen(true)}>◷ Edit dates</button>
-          <button onClick={() => onInboxArchive(card.id)}><ArchiveCardIcon /> Archive</button>
-        </div>
-        {isLabelPanelOpen && (
-          <LabelEditor
-            card={card}
-            labels={labels}
-            onClose={() => setIsLabelPanelOpen(false)}
-            onLabelToggle={onInboxLabelToggle}
-            onLabelRename={onInboxLabelRename}
-            onLabelCreate={onInboxLabelCreate}
-          />
+          {isLabelPanelOpen && (
+            <LabelEditor
+              card={card}
+              labels={labels}
+              onClose={() => setIsLabelPanelOpen(false)}
+              onLabelToggle={onInboxLabelToggle}
+              onLabelRename={onInboxLabelRename}
+              onLabelCreate={onInboxLabelCreate}
+            />
+          )}
+        </article>
+        {isCoverPanelOpen && (
+          <CardCoverEditor card={card} onSave={handleCoverSave} onRemove={handleCoverRemove} onClose={() => setIsCoverPanelOpen(false)} />
         )}
         {isDatesPanelOpen && (
-          <DatesEditor
-            card={card}
-            onClose={() => setIsDatesPanelOpen(false)}
-            onSave={(dateData) => onInboxUpdate(card.id, dateData)}
-            onRemove={() => onInboxUpdate(card.id, { dueDate: '', dueTime: '', dueReminder: '1 Day before', dueRecurring: 'Never' })}
-          />
+          <DueDateEditor card={dueDateCard} placement="side" onClose={() => setIsDatesPanelOpen(false)} onSave={handleDueDateSave} onRemove={handleDueDateRemove} />
         )}
-      </article>
+      </>
     );
   }
 
   return (
-    <article
-      className="inbox-card draggable-card"
-      draggable
-      onDragStart={handleDragStart}
-      onDragOver={(event) => event.preventDefault()}
-      onDrop={handleDrop}
-      onDoubleClick={() => onInboxOpen(card.id)}
-    >
-      <button
-        className={card.completed ? 'inbox-complete-dot is-complete' : 'inbox-complete-dot'}
-        aria-label="Mark complete"
-        onClick={(event) => {
-          event.stopPropagation();
-          onInboxCompleteToggle(card.id);
-        }}
-      />
-      <div className="inbox-card-main">
-        {card.labels?.length > 0 && (
-          <div className="inbox-label-strip">
-            {card.labels.map((labelValue) => {
-              const label = resolveCardLabel(labelValue, labels);
-              return label ? <span key={label.id || label.color} style={{ '--label-color': label.color }}>{label.name}</span> : null;
-            })}
-          </div>
-        )}
-        <p className="inbox-card-title">{card.title}</p>
-        {card.dueDate && (
-          <span className="inbox-due-badge">◷ {formatCardDate(card.dueDate)}{card.dueTime ? ` · ${card.dueTime}` : ''}</span>
-        )}
-      </div>
-      {card.completed && (
+    <>
+      <article
+        className={cardCover ? 'inbox-card draggable-card has-cover' : 'inbox-card draggable-card'}
+        draggable
+        onDragStart={handleDragStart}
+        onDragOver={(event) => event.preventDefault()}
+        onDrop={handleDrop}
+        onDoubleClick={() => onInboxOpen(card.id)}
+      >
+        {cardCover && <CardCoverDisplay cover={cardCover} />}
         <button
-          className="inbox-archive-button"
-          aria-label="Archive card"
+          className={card.completed ? 'inbox-complete-dot is-complete' : 'inbox-complete-dot'}
+          aria-label="Mark complete"
           onClick={(event) => {
             event.stopPropagation();
-            onInboxArchive(card.id);
+            onInboxCompleteToggle(card.id);
           }}
-        >
-          <ArchiveCardIcon />
-        </button>
+        />
+        <div className="inbox-card-main">
+          {card.labels?.length > 0 && (
+            <div className="inbox-label-strip">
+              {card.labels.map((labelValue) => {
+                const label = resolveCardLabel(labelValue, labels);
+                return label ? <span key={label.id || label.color} style={{ '--label-color': label.color }}>{label.name}</span> : null;
+              })}
+            </div>
+          )}
+          <p className="inbox-card-title">{card.title}</p>
+          {card.dueDate && (
+            <div className="inbox-due-row">
+              <DueDateBadge
+                card={dueDateCard}
+                onEditDueDate={() => setIsDatesPanelOpen(true)}
+              />
+            </div>
+          )}
+        </div>
+        {card.completed && (
+          <button
+            className="inbox-archive-button"
+            aria-label="Archive card"
+            onClick={(event) => {
+              event.stopPropagation();
+              onInboxArchive(card.id);
+            }}
+          >
+            <ArchiveCardIcon />
+          </button>
+        )}
+        <button className="inbox-edit-button" aria-label="Edit card" onClick={handleEditClick}><EditCardIcon /></button>
+      </article>
+      {isCoverPanelOpen && (
+        <CardCoverEditor card={card} onSave={handleCoverSave} onRemove={handleCoverRemove} onClose={() => setIsCoverPanelOpen(false)} />
       )}
-      <button className="inbox-edit-button" aria-label="Edit card" onClick={handleEditClick}><EditCardIcon /></button>
-    </article>
+      {isDatesPanelOpen && (
+        <DueDateEditor card={dueDateCard} placement="side" onClose={() => setIsDatesPanelOpen(false)} onSave={handleDueDateSave} onRemove={handleDueDateRemove} />
+      )}
+    </>
   );
 }
 
@@ -1943,9 +2229,15 @@ function Board({
   status,
   labels,
   onBoardTitleChange,
+  onBoardBackgroundChange,
   onListCreate,
   onListUpdate,
   onListDelete,
+  onListDuplicate,
+  onListMoveRight,
+  onListSort,
+  onListMoveCardsRight,
+  onListArchiveCards,
   onListCollapseToggle,
   onListReorder,
   onCardCreate,
@@ -1973,8 +2265,8 @@ function Board({
   }
 
   return (
-    <section className="board-shell">
-      <BoardHeader board={board} onBoardTitleChange={onBoardTitleChange} onArchivedCardsOpen={onArchivedCardsOpen} archivedCardsCount={archivedCardsCount} />
+    <section className="board-shell" style={getBoardBackgroundStyle(board.background)}>
+      <BoardHeader board={board} onBoardTitleChange={onBoardTitleChange} onBoardBackgroundChange={onBoardBackgroundChange} onArchivedCardsOpen={onArchivedCardsOpen} archivedCardsCount={archivedCardsCount} />
       <div className="board-canvas">
         <p className="board-status">{status}</p>
         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
@@ -1987,6 +2279,11 @@ function Board({
                   isCollapsed={collapsedListIds.includes(list.id)}
                   onListUpdate={onListUpdate}
                   onListDelete={onListDelete}
+                  onListDuplicate={onListDuplicate}
+                  onListMoveRight={onListMoveRight}
+                  onListSort={onListSort}
+                  onListMoveCardsRight={onListMoveCardsRight}
+                  onListArchiveCards={onListArchiveCards}
                   onListCollapseToggle={onListCollapseToggle}
                   onCardCreate={onCardCreate}
                   onCardOpen={onCardOpen}
@@ -2007,8 +2304,9 @@ function Board({
 }
 
 // Renders board title and board-level action controls.
-function BoardHeader({ board, onBoardTitleChange, onArchivedCardsOpen, archivedCardsCount = 0 }) {
+function BoardHeader({ board, onBoardTitleChange, onBoardBackgroundChange, onArchivedCardsOpen, archivedCardsCount = 0 }) {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [isBackgroundEditorOpen, setIsBackgroundEditorOpen] = useState(false);
   const menuRef = useRef(null);
 
   useEffect(() => {
@@ -2039,9 +2337,28 @@ function BoardHeader({ board, onBoardTitleChange, onArchivedCardsOpen, archivedC
 
   // Opens the archived card modal from the board menu.
   function openArchivedCards(event) {
+    event.preventDefault();
     event.stopPropagation();
     setIsMenuOpen(false);
     onArchivedCardsOpen();
+  }
+
+  // Keeps keyboard activation working while mouse activation opens before menu dismissal can interfere.
+  function handleArchivedCardsClick(event) {
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (event.detail === 0) {
+      openArchivedCards(event);
+    }
+  }
+
+  // Opens the board background picker from the menu.
+  function openBackgroundEditor(event) {
+    event.preventDefault();
+    event.stopPropagation();
+    setIsMenuOpen(false);
+    setIsBackgroundEditorOpen(true);
   }
 
   return (
@@ -2055,14 +2372,126 @@ function BoardHeader({ board, onBoardTitleChange, onArchivedCardsOpen, archivedC
           <section className="board-menu-popover">
             <header><span>Menu</span><button onClick={() => setIsMenuOpen(false)}>×</button></header>
             <button>☷ Sort <span>›</span></button>
-            <button type="button" onMouseDown={(event) => event.stopPropagation()} onClick={openArchivedCards}>▱ View archived cards <span>{archivedCardsCount}</span></button>
+            <button type="button" onMouseDown={openArchivedCards} onClick={handleArchivedCardsClick}>▱ View archived cards <span>{archivedCardsCount}</span></button>
             <button>＋ Add from <span>›</span></button>
-            <button>▣ Change background <span>›</span></button>
+            <button type="button" onMouseDown={openBackgroundEditor} onClick={openBackgroundEditor}>▣ Change background <span>›</span></button>
             <button>⚙ Settings <span>›</span></button>
           </section>
         )}
       </div>
+      {isBackgroundEditorOpen && (
+        <BoardBackgroundEditor
+          background={board.background}
+          onSelect={onBoardBackgroundChange}
+          onClose={() => setIsBackgroundEditorOpen(false)}
+        />
+      )}
     </header>
+  );
+}
+
+// Renders the Trello-like board background picker.
+function BoardBackgroundEditor({ background, onSelect, onClose }) {
+  const [view, setView] = useState('overview');
+  const panelRef = useRef(null);
+
+  useEffect(() => {
+    function handleDismiss(event) {
+      if (event.key === 'Escape') {
+        onClose();
+        return;
+      }
+
+      if (event.type === 'mousedown' && !panelRef.current?.contains(event.target)) {
+        onClose();
+      }
+    }
+
+    document.addEventListener('mousedown', handleDismiss);
+    document.addEventListener('keydown', handleDismiss);
+
+    return () => {
+      document.removeEventListener('mousedown', handleDismiss);
+      document.removeEventListener('keydown', handleDismiss);
+    };
+  }, [onClose]);
+
+  function selectBackground(nextBackground) {
+    onSelect(nextBackground);
+    onClose();
+  }
+
+  function isSelected(nextBackground) {
+    if (!background || background.type !== nextBackground.type) {
+      return false;
+    }
+
+    return nextBackground.type === 'image'
+      ? background.url === nextBackground.url
+      : background.value === nextBackground.value;
+  }
+
+  return (
+    <section className="modal-backdrop board-background-backdrop">
+      <div className="board-background-panel" ref={panelRef}>
+        <div className="background-editor-header">
+          <button aria-label="Back" onClick={() => (view === 'overview' ? onClose() : setView('overview'))}>‹</button>
+          <span>{view === 'overview' ? 'Change background' : view === 'photos' ? 'Photos' : 'Colors'}</span>
+          <button aria-label="Close" onClick={onClose}>x</button>
+        </div>
+
+        {view === 'overview' && (
+          <>
+            <div className="background-editor-feature-grid">
+              <button className="background-feature-card background-feature-photos" onClick={() => setView('photos')}>
+                <span>Photos</span>
+              </button>
+              <button className="background-feature-card background-feature-colors" onClick={() => setView('colors')}>
+                <span>Colors</span>
+              </button>
+            </div>
+            <div className="background-editor-divider" />
+            <button className="background-remove-button" onClick={() => selectBackground(DEFAULT_BOARD_BACKGROUND)}>Reset background</button>
+          </>
+        )}
+
+        {view === 'photos' && (
+          <div className="background-photo-grid">
+            {boardBackgroundPhotoOptions.map((photo) => {
+              const nextBackground = { type: 'image', url: photo.url, position: 'center' };
+
+              return (
+                <button
+                  key={photo.id}
+                  className={isSelected(nextBackground) ? 'background-photo-option is-selected' : 'background-photo-option'}
+                  style={{ backgroundImage: 'url("' + photo.url + '")' }}
+                  onClick={() => selectBackground(nextBackground)}
+                  aria-label={'Use ' + photo.label + ' background'}
+                />
+              );
+            })}
+          </div>
+        )}
+
+        {view === 'colors' && (
+          <div className="background-color-grid">
+            {boardBackgroundColorOptions.map((value) => {
+              const nextBackground = { type: 'color', value };
+
+              return (
+                <button
+                  key={value}
+                  className={isSelected(nextBackground) ? 'background-color-option is-selected' : 'background-color-option'}
+                  style={{ background: value }}
+                  onClick={() => selectBackground(nextBackground)}
+                  aria-label="Use color background"
+                />
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </section>
   );
 }
 
@@ -2150,6 +2579,12 @@ function BoardList({
   setSortableNodeRef,
   sortableStyle,
   onListUpdate,
+  onListDelete,
+  onListDuplicate,
+  onListMoveRight,
+  onListSort,
+  onListMoveCardsRight,
+  onListArchiveCards,
   onListCollapseToggle,
   onCardCreate,
   onCardOpen,
@@ -2159,6 +2594,64 @@ function BoardList({
   onCardArchive,
   labels
 }) {
+  const [isActionsOpen, setIsActionsOpen] = useState(false);
+  const [actionsPosition, setActionsPosition] = useState(null);
+  const [addCardSignal, setAddCardSignal] = useState(0);
+  const menuRef = useRef(null);
+  const actionButtonRef = useRef(null);
+
+  useEffect(() => {
+    if (!isActionsOpen) {
+      return undefined;
+    }
+
+    function closeActions() {
+      setIsActionsOpen(false);
+    }
+
+    function updateActionsPosition() {
+      const buttonRect = actionButtonRef.current?.getBoundingClientRect();
+
+      if (!buttonRect) {
+        return;
+      }
+
+      const menuWidth = Math.min(306, window.innerWidth - 32);
+      const left = Math.min(Math.max(16, buttonRect.right - menuWidth), window.innerWidth - menuWidth - 16);
+      const top = Math.min(buttonRect.bottom + 8, window.innerHeight - 96);
+      setActionsPosition({ top, left, width: menuWidth });
+    }
+
+    function handleDismiss(event) {
+      if (event.key === 'Escape') {
+        closeActions();
+        return;
+      }
+
+      if (event.type === 'mousedown' && !menuRef.current?.contains(event.target) && !actionButtonRef.current?.contains(event.target)) {
+        closeActions();
+      }
+    }
+
+    updateActionsPosition();
+    document.addEventListener('mousedown', handleDismiss);
+    document.addEventListener('keydown', handleDismiss);
+    window.addEventListener('resize', updateActionsPosition);
+    window.addEventListener('scroll', updateActionsPosition, true);
+
+    return () => {
+      document.removeEventListener('mousedown', handleDismiss);
+      document.removeEventListener('keydown', handleDismiss);
+      window.removeEventListener('resize', updateActionsPosition);
+      window.removeEventListener('scroll', updateActionsPosition, true);
+    };
+  }, [isActionsOpen]);
+
+  function requestAddCard() {
+    setIsActionsOpen(false);
+    setAddCardSignal((signal) => signal + 1);
+  }
+
   // Allows cards to be dropped at the end of this list.
   function handleListDrop(event) {
     event.preventDefault();
@@ -2213,14 +2706,50 @@ function BoardList({
             )}
           </span>
         </button>
-        <button
-          className="icon-button list-more-button"
-          aria-label={`More actions for ${list.title}`}
-          onPointerDown={(event) => event.stopPropagation()}
-          onClick={(event) => event.stopPropagation()}
-        >
-          ...
-        </button>
+        <div className="list-actions-anchor" ref={menuRef}>
+          <button
+            ref={actionButtonRef}
+            className={isActionsOpen ? 'icon-button list-more-button is-active' : 'icon-button list-more-button'}
+            aria-label={`More actions for ${list.title}`}
+            aria-expanded={isActionsOpen}
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              const nextIsOpen = !isActionsOpen;
+              if (nextIsOpen) {
+                const buttonRect = event.currentTarget.getBoundingClientRect();
+                const menuWidth = Math.min(306, window.innerWidth - 32);
+                setActionsPosition({
+                  top: Math.min(buttonRect.bottom + 8, window.innerHeight - 96),
+                  left: Math.min(Math.max(16, buttonRect.right - menuWidth), window.innerWidth - menuWidth - 16),
+                  width: menuWidth
+                });
+              }
+              setIsActionsOpen(nextIsOpen);
+            }}
+          >
+            ...
+          </button>
+          {isActionsOpen && actionsPosition && createPortal(
+            <ListActionsPopover
+              list={list}
+              menuRef={menuRef}
+              position={actionsPosition}
+              onClose={() => setIsActionsOpen(false)}
+              onAddCard={requestAddCard}
+              onCopyList={() => { onListDuplicate(list.id); setIsActionsOpen(false); }}
+              onMoveList={() => { onListMoveRight(list.id); setIsActionsOpen(false); }}
+              onMoveCards={() => { onListMoveCardsRight(list.id); setIsActionsOpen(false); }}
+              onSortByTitle={() => { onListSort(list.id, 'title'); setIsActionsOpen(false); }}
+              onWatchToggle={() => onListUpdate(list.id, { watched: !list.watched })}
+              onColorSelect={(accent) => onListUpdate(list.id, { accent })}
+              onRemoveColor={() => onListUpdate(list.id, { accent: listAccents[3] })}
+              onArchiveList={() => { onListDelete(list.id); setIsActionsOpen(false); }}
+              onArchiveCards={() => { onListArchiveCards(list.id); setIsActionsOpen(false); }}
+            />,
+            document.body
+          )}
+        </div>
       </div>
 
       {isCollapsed ? (
@@ -2243,9 +2772,90 @@ function BoardList({
             ))}
           </div>
 
-          <AddCardForm listId={list.id} onCardCreate={onCardCreate} />
+          <AddCardForm listId={list.id} onCardCreate={onCardCreate} openSignal={addCardSignal} />
         </>
       )}
+    </section>
+  );
+}
+
+// Renders a Trello-style menu for list-level actions.
+function ListActionsPopover({
+  list,
+  menuRef,
+  position,
+  onClose,
+  onAddCard,
+  onCopyList,
+  onMoveList,
+  onMoveCards,
+  onSortByTitle,
+  onWatchToggle,
+  onColorSelect,
+  onRemoveColor,
+  onArchiveList,
+  onArchiveCards
+}) {
+  return (
+    <section
+      className="list-actions-popover"
+      ref={menuRef}
+      style={{ top: position.top, left: position.left, width: position.width }}
+      onPointerDown={(event) => event.stopPropagation()}
+      onClick={(event) => event.stopPropagation()}
+    >
+      <header className="list-actions-header">
+        <span>List actions</span>
+        <button type="button" aria-label="Close list actions" onClick={onClose}>x</button>
+      </header>
+
+      <div className="list-actions-group">
+        <button type="button" onClick={onAddCard}>Add card</button>
+        <button type="button" onClick={onCopyList}>Copy list</button>
+        <button type="button" onClick={onMoveList}>Move list</button>
+        <button type="button" onClick={onMoveCards}>Move all cards in this list</button>
+        <button type="button" onClick={onSortByTitle}>Sort by</button>
+        <button type="button" onClick={onWatchToggle}>{list.watched ? 'Unwatch' : 'Watch'}</button>
+      </div>
+
+      <div className="list-actions-section">
+        <div className="list-actions-section-title">
+          <span>Change list color</span>
+          <strong>PREMIUM</strong>
+          <span aria-hidden="true">⌃</span>
+        </div>
+        <div className="list-color-grid">
+          {listColorOptions.map((color) => (
+            <button
+              key={color}
+              type="button"
+              className={list.accent === color ? 'list-color-option is-selected' : 'list-color-option'}
+              style={{ '--list-color-option': color }}
+              aria-label={`Use ${color} list color`}
+              onClick={() => onColorSelect(color)}
+            >
+              {list.accent === color ? '✓' : ''}
+            </button>
+          ))}
+        </div>
+        <button type="button" className="list-remove-color" onClick={onRemoveColor}>× Remove color</button>
+      </div>
+
+      <div className="list-actions-section">
+        <div className="list-actions-section-title">
+          <span>Automation</span>
+          <span aria-hidden="true">⌃</span>
+        </div>
+        <button type="button">When a card is added to the list</button>
+        <button type="button" onClick={onSortByTitle}>Every day, sort list by</button>
+        <button type="button" onClick={onSortByTitle}>Every Monday, sort list by</button>
+        <button type="button">Create a rule</button>
+      </div>
+
+      <div className="list-actions-group is-danger-zone">
+        <button type="button" onClick={onArchiveList}>Archive this list</button>
+        <button type="button" onClick={onArchiveCards}>Archive all cards in this list</button>
+      </div>
     </section>
   );
 }
@@ -2289,9 +2899,15 @@ function AddListForm({ onListCreate }) {
 }
 
 // Renders a compact add-card form inside a list.
-function AddCardForm({ listId, onCardCreate }) {
+function AddCardForm({ listId, onCardCreate, openSignal = 0 }) {
   const [isOpen, setIsOpen] = useState(false);
   const [title, setTitle] = useState('');
+
+  useEffect(() => {
+    if (openSignal > 0) {
+      setIsOpen(true);
+    }
+  }, [openSignal]);
 
   // Submits the new card title when valid.
   function handleSubmit(event) {
@@ -2330,6 +2946,8 @@ function AddCardForm({ listId, onCardCreate }) {
 // Renders one compact card preview in a list.
 function BoardCard({ card, listId, labels, onCardOpen, onCardDrop, onCardUpdate, onCardCompleteToggle, onCardArchive }) {
   const [isQuickEditing, setIsQuickEditing] = useState(false);
+  const [isCoverPanelOpen, setIsCoverPanelOpen] = useState(false);
+  const [isDatesPanelOpen, setIsDatesPanelOpen] = useState(false);
   const [draftTitle, setDraftTitle] = useState(card.title);
   const quickEditRef = useRef(null);
 
@@ -2396,6 +3014,40 @@ function BoardCard({ card, listId, labels, onCardOpen, onCardDrop, onCardUpdate,
     onCardArchive(card.id);
   }
 
+  // Saves a selected cover on this card.
+  function handleCoverSave(cover) {
+    onCardUpdate(card.id, { cover });
+  }
+
+  // Removes the cover from this card.
+  function handleCoverRemove() {
+    onCardUpdate(card.id, { cover: null });
+  }
+
+  // Saves due date fields from the date editor.
+  function handleDueDateSave(dateData) {
+    onCardUpdate(card.id, {
+      ...dateData,
+      dueDateCompleted: Boolean(dateData.isCompleted),
+      dueReminder: dateData.dueDateReminder,
+      dueRecurring: dateData.dueDateRecurring
+    });
+  }
+
+  // Clears due date fields from the card.
+  function handleDueDateRemove() {
+    onCardUpdate(card.id, {
+      dueDate: '',
+      dueTime: '',
+      isCompleted: false,
+      dueDateCompleted: false,
+      dueDateReminder: '1 Day before',
+      dueDateRecurring: 'Never',
+      dueReminder: '1 Day before',
+      dueRecurring: 'Never'
+    });
+  }
+
   // Saves the board quick editor title when it is valid.
   function saveQuickEdit() {
     const nextTitle = draftTitle.trim();
@@ -2430,31 +3082,55 @@ function BoardCard({ card, listId, labels, onCardOpen, onCardDrop, onCardUpdate,
       })}
     </div>
   );
+  const dueDateCard = { ...card, isCompleted: Boolean(card.isCompleted || card.dueDateCompleted) };
+  const cardCover = typeof card.cover === 'object' ? card.cover : null;
 
   if (isQuickEditing) {
     return (
-      <article className="board-card board-card-editing" ref={quickEditRef}>
-        {cardLabels}
-        <textarea value={draftTitle} onChange={(event) => setDraftTitle(event.target.value)} autoFocus />
-        <button className="primary-action inbox-save-button" onClick={saveQuickEdit}>Save</button>
-        <div className="inbox-quick-menu board-quick-menu">
-          <button onClick={() => onCardOpen(card.id)}>▤ Open card</button>
-          <button onClick={handleArchiveClick}><ArchiveCardIcon /> Archive</button>
-        </div>
-      </article>
+      <>
+        <article className="board-card board-card-editing" ref={quickEditRef}>
+          {cardCover && <CardCoverDisplay cover={cardCover} />}
+          {!cardCover && typeof card.cover === 'string' && <CardCover variant={card.cover} />}
+          {cardLabels}
+          <textarea value={draftTitle} onChange={(event) => setDraftTitle(event.target.value)} autoFocus />
+          <button className="primary-action inbox-save-button" onClick={saveQuickEdit}>Save</button>
+          <div className="inbox-quick-menu board-quick-menu">
+            <button onClick={() => onCardOpen(card.id)}>▤ Open card</button>
+            <button onClick={() => setIsCoverPanelOpen(true)}>▧ Change cover</button>
+            <button onClick={() => setIsDatesPanelOpen(true)}>◷ Edit dates</button>
+            <button onClick={handleArchiveClick}><ArchiveCardIcon /> Archive</button>
+          </div>
+        </article>
+        {isCoverPanelOpen && (
+          <CardCoverEditor card={card} onSave={handleCoverSave} onRemove={handleCoverRemove} onClose={() => setIsCoverPanelOpen(false)} />
+        )}
+        {isDatesPanelOpen && (
+          <DueDateEditor card={dueDateCard} onClose={() => setIsDatesPanelOpen(false)} onSave={handleDueDateSave} onRemove={handleDueDateRemove} />
+        )}
+      </>
     );
   }
 
   return (
-    <article className="board-card draggable-card" draggable role="button" tabIndex="0" onPointerDown={(event) => event.stopPropagation()} onDragStart={handleDragStart} onDragOver={(event) => event.preventDefault()} onDrop={handleDrop} onClick={() => onCardOpen(card.id)} onKeyDown={(event) => event.key === 'Enter' && onCardOpen(card.id)}>
+    <>
+      <article className="board-card draggable-card" draggable role="button" tabIndex="0" onPointerDown={(event) => event.stopPropagation()} onDragStart={handleDragStart} onDragOver={(event) => event.preventDefault()} onDrop={handleDrop} onClick={() => onCardOpen(card.id)} onKeyDown={(event) => event.key === 'Enter' && onCardOpen(card.id)}>
       <button className={card.completed || card.done ? 'board-complete-dot is-complete' : 'board-complete-dot'} aria-label="Mark complete" onClick={handleCompleteClick} />
       {(card.completed || card.done) && (
         <button className="card-archive-button" aria-label="Archive card" onClick={handleArchiveClick}><ArchiveCardIcon /></button>
       )}
       <button className="card-edit-button" aria-label="Edit card" onClick={handleEditClick}><EditCardIcon /></button>
-      {card.cover && <CardCover variant={card.cover} />}
+      {cardCover && <CardCoverDisplay cover={cardCover} />}
+      {!cardCover && typeof card.cover === 'string' && <CardCover variant={card.cover} />}
       {cardLabels}
       <p className={card.completed || card.done ? 'card-title is-done' : 'card-title'}>{card.title}</p>
+      {card.dueDate && (
+        <div className="card-meta-row">
+          <DueDateBadge
+            card={dueDateCard}
+            onEditDueDate={() => setIsDatesPanelOpen(true)}
+          />
+        </div>
+      )}
       {(card.description || card.badges || card.members) && (
         <div className="card-footer">
           <div className="card-badges">
@@ -2470,7 +3146,14 @@ function BoardCard({ card, listId, labels, onCardOpen, onCardDrop, onCardUpdate,
           </div>
         </div>
       )}
-    </article>
+      </article>
+      {isCoverPanelOpen && (
+        <CardCoverEditor card={card} onSave={handleCoverSave} onRemove={handleCoverRemove} onClose={() => setIsCoverPanelOpen(false)} />
+      )}
+      {isDatesPanelOpen && (
+        <DueDateEditor card={dueDateCard} onClose={() => setIsDatesPanelOpen(false)} onSave={handleDueDateSave} onRemove={handleDueDateRemove} />
+      )}
+    </>
   );
 }
 

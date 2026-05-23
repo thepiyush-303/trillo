@@ -10,11 +10,28 @@ function sendError(response, status, message) {
   response.status(status).json({ error: message });
 }
 
+// Converts a database date value to the client YYYY-MM-DD string shape.
+function mapDate(value) {
+  if (!value) {
+    return null;
+  }
+
+  if (value instanceof Date) {
+    const year = value.getFullYear();
+    const month = String(value.getMonth() + 1).padStart(2, '0');
+    const day = String(value.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+
+  return String(value).slice(0, 10);
+}
+
 // Converts a database board row into the client board shape.
 function mapBoard(row) {
   return {
     id: row.id,
     title: row.title,
+    background: row.background || null,
     members: [],
     lists: []
   };
@@ -39,7 +56,15 @@ function mapCard(row) {
     title: row.title,
     description: row.description,
     position: row.position,
-    dueDate: row.due_date,
+    dueDate: mapDate(row.due_date),
+    dueTime: row.due_time || '',
+    isCompleted: Boolean(row.due_date_completed),
+    dueDateCompleted: Boolean(row.due_date_completed),
+    dueDateReminder: row.due_date_reminder || '1 Day before',
+    dueDateRecurring: row.due_date_recurring || 'Never',
+    dueReminder: row.due_date_reminder || '1 Day before',
+    dueRecurring: row.due_date_recurring || 'Never',
+    cover: row.cover || null,
     archived: row.archived,
     labels: Array.isArray(row.labels) ? row.labels : []
   };
@@ -55,6 +80,59 @@ function mapArchivedCard(row) {
       archivedAt: row.archived_at
     }
   };
+}
+
+// Reads a validated cover object from card update bodies.
+function readCover(request) {
+  const cover = request.body?.cover;
+
+  if (!cover || typeof cover !== 'object') {
+    return null;
+  }
+
+  if (cover.type === 'image' && cover.url) {
+    return {
+      type: 'image',
+      url: String(cover.url),
+      position: String(cover.position || 'center'),
+      blur: Boolean(cover.blur)
+    };
+  }
+
+  if (cover.type === 'color' && cover.color) {
+    return {
+      type: 'color',
+      color: String(cover.color)
+    };
+  }
+
+  return null;
+}
+
+// Reads a validated board background object from update bodies.
+function readBackground(request) {
+  const background = request.body?.background;
+
+  if (!background || typeof background !== 'object') {
+    return null;
+  }
+
+  if (background.type === 'image' && background.url) {
+    return {
+      type: 'image',
+      url: String(background.url),
+      position: String(background.position || 'center')
+    };
+  }
+
+  if (background.type === 'color' && background.value) {
+    return {
+      type: 'color',
+      value: String(background.value)
+    };
+  }
+
+  return null;
 }
 
 // Converts an inbox database row into the client inbox card shape.
@@ -116,7 +194,7 @@ async function updateListPositions(client, boardId, listIds) {
 
 // Lists all available boards in creation order.
 async function getBoards(_request, response) {
-  const result = await pool.query('select id, title from boards order by created_at asc');
+  const result = await pool.query('select id, title, background from boards order by created_at asc');
   response.json({ boards: result.rows.map(mapBoard) });
 }
 
@@ -129,14 +207,14 @@ async function createBoard(request, response) {
     return;
   }
 
-  const result = await pool.query('insert into boards (title) values ($1) returning id, title', [title]);
+  const result = await pool.query('insert into boards (title) values ($1) returning id, title, background', [title]);
   response.status(201).json({ board: mapBoard(result.rows[0]) });
 }
 
 // Loads one board with its ordered lists and non-archived cards.
 async function getBoard(request, response) {
   const { boardId } = request.params;
-  const boardResult = await pool.query('select id, title from boards where id = $1', [boardId]);
+  const boardResult = await pool.query('select id, title, background from boards where id = $1', [boardId]);
 
   if (boardResult.rowCount === 0) {
     sendError(response, 404, 'Board not found.');
@@ -148,7 +226,7 @@ async function getBoard(request, response) {
     [boardId]
   );
   const cardsResult = await pool.query(
-    `select cards.id, cards.list_id, cards.title, cards.description, cards.position, cards.due_date, cards.archived, cards.labels
+    `select cards.id, cards.list_id, cards.title, cards.description, cards.position, cards.due_date, cards.due_time, cards.due_date_completed, cards.due_date_reminder, cards.due_date_recurring, cards.cover, cards.archived, cards.labels
      from cards
      join lists on lists.id = cards.list_id
      where lists.board_id = $1 and cards.archived = false
@@ -196,7 +274,7 @@ async function getBoard(request, response) {
 // Lists archived cards for one board from the durable archive table.
 async function getArchivedCards(request, response) {
   const result = await pool.query(
-    `select cards.id, cards.list_id, cards.title, cards.description, cards.position, cards.due_date, cards.archived, cards.labels,
+    `select cards.id, cards.list_id, cards.title, cards.description, cards.position, cards.due_date, cards.due_time, cards.due_date_completed, cards.due_date_reminder, cards.due_date_recurring, cards.cover, cards.archived, cards.labels,
             archived_cards.original_list_id, archived_cards.original_position, archived_cards.archived_at
      from archived_cards
      join cards on cards.id = archived_cards.card_id
@@ -232,7 +310,7 @@ async function restoreCard(request, response) {
     const archive = archiveResult.rows[0];
     const result = await client.query(
       `update cards set archived = false, list_id = $1, position = $2, updated_at = now()
-       where id = $3 returning id, list_id, title, description, position, due_date, archived, labels`,
+       where id = $3 returning id, list_id, title, description, position, due_date, due_time, due_date_completed, due_date_reminder, due_date_recurring, cover, archived, labels`,
       [archive.original_list_id, archive.original_position, archive.card_id]
     );
 
@@ -258,8 +336,25 @@ async function updateBoard(request, response) {
   }
 
   const result = await pool.query(
-    'update boards set title = $1, updated_at = now() where id = $2 returning id, title',
+    'update boards set title = $1, updated_at = now() where id = $2 returning id, title, background',
     [title, request.params.boardId]
+  );
+
+  if (result.rowCount === 0) {
+    sendError(response, 404, 'Board not found.');
+    return;
+  }
+
+  response.json({ board: mapBoard(result.rows[0]) });
+}
+
+// Updates a board background.
+async function updateBoardBackground(request, response) {
+  const background = readBackground(request);
+  const result = await pool.query(
+    `update boards set background = $1::jsonb, updated_at = now()
+     where id = $2 returning id, title, background`,
+    [background ? JSON.stringify(background) : null, request.params.boardId]
   );
 
   if (result.rowCount === 0) {
@@ -362,7 +457,7 @@ async function createCard(request, response) {
   const result = await pool.query(
     `insert into cards (list_id, title, position)
      values ($1, $2, $3)
-     returning id, list_id, title, description, position, due_date, archived, labels`,
+     returning id, list_id, title, description, position, due_date, due_time, due_date_completed, due_date_reminder, due_date_recurring, cover, archived, labels`,
     [request.params.listId, title, position]
   );
 
@@ -402,6 +497,12 @@ async function reorderCards(request, response) {
 async function updateCard(request, response) {
   const title = readTitle(request);
   const description = String(request.body?.description || '');
+  const dueDate = request.body?.dueDate ? String(request.body.dueDate) : null;
+  const dueTime = request.body?.dueTime ? String(request.body.dueTime) : '';
+  const dueDateCompleted = Boolean(request.body?.dueDateCompleted || request.body?.isCompleted);
+  const dueDateReminder = String(request.body?.dueDateReminder || request.body?.dueReminder || '1 Day before');
+  const dueDateRecurring = String(request.body?.dueDateRecurring || request.body?.dueRecurring || 'Never');
+  const cover = readCover(request);
 
   if (!title) {
     sendError(response, 400, 'Card title is required.');
@@ -409,9 +510,21 @@ async function updateCard(request, response) {
   }
 
   const result = await pool.query(
-    `update cards set title = $1, description = $2, updated_at = now()
-     where id = $3 returning id, list_id, title, description, position, due_date, archived, labels`,
-    [title, description, request.params.cardId]
+    `update cards set title = $1, description = $2, due_date = $3, due_time = $4,
+       due_date_completed = $5, due_date_reminder = $6, due_date_recurring = $7,
+       cover = $8::jsonb, updated_at = now()
+     where id = $9 returning id, list_id, title, description, position, due_date, due_time, due_date_completed, due_date_reminder, due_date_recurring, cover, archived, labels`,
+    [
+      title,
+      description,
+      dueDate,
+      dueTime,
+      dueDateCompleted,
+      dueDateReminder,
+      dueDateRecurring,
+      cover ? JSON.stringify(cover) : null,
+      request.params.cardId
+    ]
   );
 
   if (result.rowCount === 0) {
@@ -475,7 +588,7 @@ async function archiveCard(request, response) {
     );
 
     const archivedResult = await client.query(
-      `select cards.id, cards.list_id, cards.title, cards.description, cards.position, cards.due_date, cards.archived, cards.labels,
+      `select cards.id, cards.list_id, cards.title, cards.description, cards.position, cards.due_date, cards.due_time, cards.due_date_completed, cards.due_date_reminder, cards.due_date_recurring, cards.cover, cards.archived, cards.labels,
               archived_cards.original_list_id, archived_cards.original_position, archived_cards.archived_at
        from archived_cards
        join cards on cards.id = archived_cards.card_id
@@ -541,6 +654,7 @@ boardsRouter.post('/boards', createBoard);
 boardsRouter.get('/boards/:boardId', getBoard);
 boardsRouter.get('/boards/:boardId/archived-cards', getArchivedCards);
 boardsRouter.patch('/boards/:boardId', updateBoard);
+boardsRouter.patch('/boards/:boardId/background', updateBoardBackground);
 boardsRouter.post('/boards/:boardId/lists', createList);
 boardsRouter.patch('/boards/:boardId/lists/reorder', reorderLists);
 boardsRouter.patch('/lists/:listId', updateList);
