@@ -351,6 +351,50 @@ function getBoardBackgroundStyle(background) {
   return undefined;
 }
 
+// Creates a blank local board that can be switched to without changing Inbox state.
+function createLocalBoard({ title, background }) {
+  return {
+    id: createLocalId('board'),
+    title: title.trim(),
+    background: background || DEFAULT_BOARD_BACKGROUND,
+    members: DEMO_BOARD.members,
+    lists: []
+  };
+}
+
+// Finds visible cards matching the global search query.
+function getSearchResults(query, board, inboxCards) {
+  const needle = query.trim().toLowerCase();
+
+  if (!needle) {
+    return [];
+  }
+
+  const inboxResults = inboxCards
+    .filter((card) => !card.archived && card.title.toLowerCase().includes(needle))
+    .map((card) => ({
+      id: `inbox-${card.id}`,
+      type: 'inbox',
+      cardId: card.id,
+      title: card.title,
+      location: 'Inbox'
+    }));
+
+  const boardResults = board.lists.flatMap((list) =>
+    list.cards
+      .filter((card) => !card.archived && card.title.toLowerCase().includes(needle))
+      .map((card) => ({
+        id: `board-${card.id}`,
+        type: 'board',
+        cardId: card.id,
+        title: card.title,
+        location: list.title
+      }))
+  );
+
+  return [...inboxResults, ...boardResults].slice(0, 8);
+}
+
 // Reads the drag payload stored by a draggable card.
 function readDragPayload(event) {
   const payload = event.dataTransfer.getData('application/json') || event.dataTransfer.getData('text/plain');
@@ -500,6 +544,7 @@ function sortInboxCards(inboxCards, direction) {
 // Renders the Trello-style application shell for the current milestone.
 function App() {
   const [board, setBoard] = useState(DEMO_BOARD);
+  const [boards, setBoards] = useState([DEMO_BOARD]);
   const [inboxCards, setInboxCards] = useState(DEMO_INBOX_CARDS);
   const [inboxLabels, setInboxLabels] = useState(defaultInboxLabels);
   const [archivedInboxCards, setArchivedInboxCards] = useState([]);
@@ -514,6 +559,8 @@ function App() {
   const [collapsedListIds, setCollapsedListIds] = useState(() => readCollapsedListIds(DEMO_BOARD.id));
   const [inboxWidth, setInboxWidth] = useState(readInboxWidth);
   const [visibleViews, setVisibleViews] = useState({ inbox: true, board: true });
+  const [searchQuery, setSearchQuery] = useState('');
+  const [highlightedCard, setHighlightedCard] = useState(null);
   const skipCollapsedPersistRef = useRef(false);
   const [status, setStatus] = useState('Using local demo data until the API is connected.');
 
@@ -521,6 +568,18 @@ function App() {
     loadInitialBoard(setBoard, setStatus);
     loadInitialInbox(setInboxCards, setInboxLabels);
   }, []);
+
+  useEffect(() => {
+    setBoards((currentBoards) => {
+      const boardExists = currentBoards.some((item) => item.id === board.id);
+
+      if (!boardExists) {
+        return [...currentBoards, board];
+      }
+
+      return currentBoards.map((item) => (item.id === board.id ? board : item));
+    });
+  }, [board]);
 
   useEffect(() => {
     skipCollapsedPersistRef.current = true;
@@ -550,6 +609,53 @@ function App() {
     const filteredCards = filterInboxCards(inboxCards, inboxFilters);
     return inboxSortDirection === 'none' ? filteredCards : sortInboxCards(filteredCards, inboxSortDirection);
   }, [inboxCards, inboxFilters, inboxSortDirection]);
+
+  const searchResults = useMemo(() => getSearchResults(searchQuery, board, inboxCards), [searchQuery, board, inboxCards]);
+
+  // Highlights and scrolls to a card selected from global search.
+  function handleSearchResultSelect(result) {
+    setSearchQuery('');
+    setHighlightedCard({ type: result.type, id: result.cardId });
+    setVisibleViews((current) => ({
+      ...current,
+      inbox: result.type === 'inbox' ? true : current.inbox,
+      board: result.type === 'board' ? true : current.board
+    }));
+
+    window.setTimeout(() => {
+      const selector = result.type === 'inbox'
+        ? `[data-inbox-card-id="${result.cardId}"]`
+        : `[data-board-card-id="${result.cardId}"]`;
+      document.querySelector(selector)?.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+    }, 80);
+
+    window.setTimeout(() => {
+      setHighlightedCard((current) => (current?.type === result.type && current?.id === result.cardId ? null : current));
+    }, 2600);
+  }
+
+  // Creates and opens a new local board while keeping Inbox state unchanged.
+  function handleBoardCreate(boardDraft) {
+    const nextBoard = createLocalBoard(boardDraft);
+    setBoards((currentBoards) => currentBoards.map((item) => (item.id === board.id ? board : item)).concat(nextBoard));
+    setBoard(nextBoard);
+    setArchivedBoardCards([]);
+    setVisibleViews((current) => ({ ...current, board: true }));
+  }
+
+  // Switches the active board while preserving the shared Inbox.
+  function handleBoardSwitch(boardId) {
+    const nextBoard = boards.find((item) => item.id === boardId);
+
+    if (!nextBoard || nextBoard.id === board.id) {
+      return;
+    }
+
+    setBoards((currentBoards) => currentBoards.map((item) => (item.id === board.id ? board : item)));
+    setBoard(nextBoard);
+    setSelectedCardId(null);
+    setVisibleViews((current) => ({ ...current, board: true }));
+  }
 
   // Updates the board title locally and through the API when available.
   async function handleBoardTitleChange(title) {
@@ -1343,7 +1449,15 @@ function App() {
 
   return (
     <main className={visibleViews.board ? 'app-shell' : 'app-shell app-shell-inbox-only'}>
-      {visibleViews.board && <TopBar />}
+      {visibleViews.board && (
+        <TopBar
+          searchQuery={searchQuery}
+          searchResults={searchResults}
+          onSearchChange={setSearchQuery}
+          onSearchResultSelect={handleSearchResultSelect}
+          onBoardCreate={handleBoardCreate}
+        />
+      )}
       <section className={workspaceClassName} style={{ '--inbox-width': `${inboxWidth}px` }}>
         {visibleViews.inbox && (
           <InboxPanel
@@ -1367,6 +1481,7 @@ function App() {
             onSortToggle={handleInboxSortToggle}
             onBackgroundChange={handleInboxBackgroundChange}
             onFiltersChange={setInboxFilters}
+            highlightedCard={highlightedCard}
           />
         )}
         {visibleViews.inbox && visibleViews.board && (
@@ -1405,10 +1520,11 @@ function App() {
             archivedCardsCount={archivedBoardCards.length}
             labels={inboxLabels}
             collapsedListIds={collapsedListIds}
+            highlightedCard={highlightedCard}
           />
         )}
       </section>
-      <BottomDock visibleViews={visibleViews} onViewToggle={handleViewToggle} />
+      <BottomDock visibleViews={visibleViews} boards={boards} activeBoardId={board.id} onViewToggle={handleViewToggle} onBoardSwitch={handleBoardSwitch} />
       {isArchivedBoardOpen && (
         <ArchivedCardsModal
           cards={archivedBoardCards}
@@ -1505,34 +1621,150 @@ async function loadInitialInbox(setInboxCards, setInboxLabels) {
 }
 
 // Renders the dark global navigation bar.
-function TopBar() {
+function TopBar({ searchQuery, searchResults, onSearchChange, onSearchResultSelect, onBoardCreate }) {
+  const [isCreateMenuOpen, setIsCreateMenuOpen] = useState(false);
+  const [isCreatePanelOpen, setIsCreatePanelOpen] = useState(false);
+  const createRef = useRef(null);
+  const hasSearchQuery = searchQuery.trim().length > 0;
+
+  useEffect(() => {
+    if (!isCreateMenuOpen && !isCreatePanelOpen) {
+      return undefined;
+    }
+
+    function handleDismiss(event) {
+      if (event.key === 'Escape') {
+        setIsCreateMenuOpen(false);
+        setIsCreatePanelOpen(false);
+        return;
+      }
+
+      if (event.type === 'mousedown' && !createRef.current?.contains(event.target)) {
+        setIsCreateMenuOpen(false);
+        setIsCreatePanelOpen(false);
+      }
+    }
+
+    document.addEventListener('mousedown', handleDismiss);
+    document.addEventListener('keydown', handleDismiss);
+
+    return () => {
+      document.removeEventListener('mousedown', handleDismiss);
+      document.removeEventListener('keydown', handleDismiss);
+    };
+  }, [isCreateMenuOpen, isCreatePanelOpen]);
+
   return (
     <header className="top-bar">
       <div className="top-left">
-        <button className="icon-button" aria-label="Open app switcher">
+        <button className="icon-button app-switcher-button" aria-label="Open app switcher">
           <span className="grid-icon" />
         </button>
-        <div className="brand-mark" aria-hidden="true">
-          <span />
-          <span />
-        </div>
+        <div className="brand-mark" aria-hidden="true"><span /><span /></div>
         <span className="brand-name">Trello</span>
       </div>
 
-      <label className="search-box">
-        <span aria-hidden="true">⌕</span>
-        <input type="search" placeholder="Search" />
-      </label>
+      <div className="top-center">
+        <label className="search-box">
+          <span aria-hidden="true">⌕</span>
+          <input type="search" value={searchQuery} onChange={(event) => onSearchChange(event.target.value)} placeholder="Search" />
+          {hasSearchQuery && (
+            <section className="search-results-popover">
+              <h3>Cards</h3>
+              {searchResults.length === 0 ? (
+                <p>No matching active cards</p>
+              ) : (
+                searchResults.map((result) => (
+                  <button key={result.id} type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => onSearchResultSelect(result)}>
+                    <span>{result.title}</span>
+                    <small>{result.location}</small>
+                  </button>
+                ))
+              )}
+            </section>
+          )}
+        </label>
 
-      <button className="create-button">Create</button>
-
-      <div className="top-actions">
-        <button className="icon-button" aria-label="Announcements">◌</button>
-        <button className="icon-button" aria-label="Notifications">♢</button>
-        <button className="icon-button" aria-label="Help">?</button>
-        <UserAvatar initials="PB" />
+        <div className="create-anchor" ref={createRef}>
+          <button className="create-button" onClick={() => { setIsCreateMenuOpen((isOpen) => !isOpen); setIsCreatePanelOpen(false); }}>Create</button>
+          {isCreateMenuOpen && (
+            <section className="create-menu-popover">
+              <button type="button" onClick={() => { setIsCreateMenuOpen(false); setIsCreatePanelOpen(true); }}>
+                <span className="create-menu-icon">▥</span>
+                <span>
+                  <strong>Create board</strong>
+                  <small>A board is made up of cards ordered on lists. Use it to manage projects, track information, or organize anything.</small>
+                </span>
+              </button>
+            </section>
+          )}
+          {isCreatePanelOpen && (
+            <CreateBoardPanel
+              onClose={() => setIsCreatePanelOpen(false)}
+              onCreate={(boardDraft) => {
+                onBoardCreate(boardDraft);
+                setIsCreatePanelOpen(false);
+              }}
+            />
+          )}
+        </div>
       </div>
+
+      <div className="top-actions"><UserAvatar initials="PB" /></div>
     </header>
+  );
+}
+
+// Renders the Trello-like create board panel opened from the global Create button.
+function CreateBoardPanel({ onClose, onCreate }) {
+  const [title, setTitle] = useState('');
+  const [background, setBackground] = useState(DEFAULT_BOARD_BACKGROUND);
+  const canCreate = title.trim().length > 0;
+
+  function submitBoard(event) {
+    event.preventDefault();
+
+    if (canCreate) {
+      onCreate({ title, background });
+    }
+  }
+
+  return (
+    <form className="create-board-panel" onSubmit={submitBoard}>
+      <header>
+        <button type="button" aria-label="Back" onClick={onClose}>‹</button>
+        <span>Create board</span>
+        <button type="button" aria-label="Close" onClick={onClose}>×</button>
+      </header>
+
+      <div className="create-board-preview" style={getBoardBackgroundStyle(background)}>
+        <div className="preview-list" />
+        <div className="preview-list is-tall" />
+        <div className="preview-list" />
+      </div>
+
+      <label className="create-board-label">Background</label>
+      <div className="create-background-grid">
+        {boardBackgroundPhotoOptions.slice(0, 4).map((photo) => {
+          const option = { type: 'image', url: photo.url, position: 'center' };
+          const selected = background.type === 'image' && background.url === photo.url;
+
+          return <button key={photo.id} type="button" className={selected ? 'create-background-option is-selected' : 'create-background-option'} style={{ backgroundImage: `url("${photo.url}")` }} onClick={() => setBackground(option)} aria-label={`Use ${photo.label} background`} />;
+        })}
+      </div>
+      <div className="create-background-grid is-colors">
+        {boardBackgroundColorOptions.slice(0, 6).map((value) => {
+          const option = { type: 'color', value };
+          const selected = background.type === 'color' && background.value === value;
+
+          return <button key={value} type="button" className={selected ? 'create-background-option is-selected' : 'create-background-option'} style={{ background: value }} onClick={() => setBackground(option)} aria-label="Use board color" />;
+        })}
+      </div>
+
+      <label className="create-board-label" htmlFor="new-board-title">Board title <span>*</span></label>
+      <input id="new-board-title" value={title} onChange={(event) => setTitle(event.target.value)} autoFocus />
+      <button type="submit" className="create-board-submit" disabled={!canCreate}>Create</button>
+    </form>
   );
 }
 
@@ -1557,7 +1789,8 @@ function InboxPanel({
   onInboxLabelCreate,
   onSortToggle,
   onBackgroundChange,
-  onFiltersChange
+  onFiltersChange,
+  highlightedCard
 }) {
   const [openPanel, setOpenPanel] = useState(null);
   const popoverRef = useRef(null);
@@ -1653,6 +1886,7 @@ function InboxPanel({
             onInboxLabelToggle={onInboxLabelToggle}
             onInboxLabelRename={onInboxLabelRename}
             onInboxLabelCreate={onInboxLabelCreate}
+            isHighlighted={highlightedCard?.type === 'inbox' && highlightedCard.id === card.id}
           />
         ))}
       </div>
@@ -1772,7 +2006,8 @@ function InboxCard({
   onInboxCompleteToggle,
   onInboxLabelToggle,
   onInboxLabelRename,
-  onInboxLabelCreate
+  onInboxLabelCreate,
+  isHighlighted = false
 }) {
   const [isQuickEditing, setIsQuickEditing] = useState(false);
   const [isLabelPanelOpen, setIsLabelPanelOpen] = useState(false);
@@ -1932,7 +2167,8 @@ function InboxCard({
   return (
     <>
       <article
-        className={cardCover ? 'inbox-card draggable-card has-cover' : 'inbox-card draggable-card'}
+        className={[cardCover ? 'inbox-card draggable-card has-cover' : 'inbox-card draggable-card', isHighlighted ? 'is-search-highlight' : ''].filter(Boolean).join(' ')}
+        data-inbox-card-id={card.id}
         draggable
         onDragStart={handleDragStart}
         onDragOver={(event) => event.preventDefault()}
@@ -2261,7 +2497,8 @@ function Board({
   onCardArchive,
   onArchivedCardsOpen,
   archivedCardsCount,
-  collapsedListIds
+  collapsedListIds,
+  highlightedCard
 }) {
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }));
   const listIds = useMemo(() => board.lists.map((list) => list.id), [board.lists]);
@@ -2604,7 +2841,8 @@ function BoardList({
   onCardUpdate,
   onCardCompleteToggle,
   onCardArchive,
-  labels
+  labels,
+  highlightedCard
 }) {
   const [isActionsOpen, setIsActionsOpen] = useState(false);
   const [actionsPosition, setActionsPosition] = useState(null);
@@ -2780,7 +3018,7 @@ function BoardList({
         <>
           <div className="card-stack" onPointerDown={(event) => event.stopPropagation()}>
             {list.cards.map((card) => (
-              <BoardCard key={card.id} card={card} listId={list.id} labels={labels} onCardOpen={onCardOpen} onCardDrop={onCardDrop} onCardUpdate={onCardUpdate} onCardCompleteToggle={onCardCompleteToggle} onCardArchive={onCardArchive} />
+              <BoardCard key={card.id} card={card} listId={list.id} labels={labels} onCardOpen={onCardOpen} onCardDrop={onCardDrop} onCardUpdate={onCardUpdate} onCardCompleteToggle={onCardCompleteToggle} onCardArchive={onCardArchive} isHighlighted={highlightedCard?.type === 'board' && highlightedCard.id === card.id} />
             ))}
           </div>
 
@@ -2956,7 +3194,7 @@ function AddCardForm({ listId, onCardCreate, openSignal = 0 }) {
 }
 
 // Renders one compact card preview in a list.
-function BoardCard({ card, listId, labels, onCardOpen, onCardDrop, onCardUpdate, onCardCompleteToggle, onCardArchive }) {
+function BoardCard({ card, listId, labels, onCardOpen, onCardDrop, onCardUpdate, onCardCompleteToggle, onCardArchive, isHighlighted = false }) {
   const [isQuickEditing, setIsQuickEditing] = useState(false);
   const [isCoverPanelOpen, setIsCoverPanelOpen] = useState(false);
   const [isDatesPanelOpen, setIsDatesPanelOpen] = useState(false);
@@ -3129,12 +3367,13 @@ function BoardCard({ card, listId, labels, onCardOpen, onCardDrop, onCardUpdate,
     'board-card draggable-card',
     hasImageCover || hasSolidCover ? 'has-cover' : '',
     hasImageCover ? 'has-image-cover' : '',
-    hasSolidCover ? 'has-solid-cover' : ''
+    hasSolidCover ? 'has-solid-cover' : '',
+    isHighlighted ? 'is-search-highlight' : ''
   ].filter(Boolean).join(' ');
 
   return (
     <>
-      <article className={boardCardClassName} draggable role="button" tabIndex="0" onPointerDown={(event) => event.stopPropagation()} onDragStart={handleDragStart} onDragOver={(event) => event.preventDefault()} onDrop={handleDrop} onClick={() => onCardOpen(card.id)} onKeyDown={(event) => event.key === 'Enter' && onCardOpen(card.id)}>
+      <article className={boardCardClassName} data-board-card-id={card.id} draggable role="button" tabIndex="0" onPointerDown={(event) => event.stopPropagation()} onDragStart={handleDragStart} onDragOver={(event) => event.preventDefault()} onDrop={handleDrop} onClick={() => onCardOpen(card.id)} onKeyDown={(event) => event.key === 'Enter' && onCardOpen(card.id)}>
       <button className={card.completed || card.done ? 'board-complete-dot is-complete' : 'board-complete-dot'} aria-label="Mark complete" onClick={handleCompleteClick} />
       {(card.completed || card.done) && (
         <button className="card-archive-button" aria-label="Archive card" onClick={handleArchiveClick}><ArchiveCardIcon /></button>
@@ -3476,25 +3715,54 @@ function ArchiveCardIcon() {
 }
 
 // Renders the floating view switcher dock from the reference board UI.
-function BottomDock({ visibleViews, onViewToggle }) {
+function BottomDock({ visibleViews, boards, activeBoardId, onViewToggle, onBoardSwitch }) {
+  const [isSwitchOpen, setIsSwitchOpen] = useState(false);
+  const switchRef = useRef(null);
+
+  useEffect(() => {
+    if (!isSwitchOpen) {
+      return undefined;
+    }
+
+    function handleDismiss(event) {
+      if (event.key === 'Escape') {
+        setIsSwitchOpen(false);
+        return;
+      }
+
+      if (event.type === 'mousedown' && !switchRef.current?.contains(event.target)) {
+        setIsSwitchOpen(false);
+      }
+    }
+
+    document.addEventListener('mousedown', handleDismiss);
+    document.addEventListener('keydown', handleDismiss);
+
+    return () => {
+      document.removeEventListener('mousedown', handleDismiss);
+      document.removeEventListener('keydown', handleDismiss);
+    };
+  }, [isSwitchOpen]);
+
   return (
     <nav className="bottom-dock" aria-label="Board views">
-      <button
-        className={visibleViews.inbox ? 'is-active' : ''}
-        aria-pressed={visibleViews.inbox}
-        onClick={() => onViewToggle('inbox')}
-      >
-        ▣ Inbox
-      </button>
-      <button
-        className={visibleViews.board ? 'is-active' : ''}
-        aria-pressed={visibleViews.board}
-        onClick={() => onViewToggle('board')}
-      >
-        ▥ Board
-      </button>
+      <button className={visibleViews.inbox ? 'is-active' : ''} aria-pressed={visibleViews.inbox} onClick={() => onViewToggle('inbox')}>▣ Inbox</button>
+      <button className={visibleViews.board ? 'is-active' : ''} aria-pressed={visibleViews.board} onClick={() => onViewToggle('board')}>▥ Board</button>
       <span className="dock-divider" aria-hidden="true" />
-      <button>⇄ Switch boards</button>
+      <div className="board-switch-anchor" ref={switchRef}>
+        <button type="button" aria-expanded={isSwitchOpen} onClick={() => setIsSwitchOpen((isOpen) => !isOpen)}>⇄ Switch boards</button>
+        {isSwitchOpen && (
+          <section className="board-switch-popover">
+            <h3>Switch boards</h3>
+            {boards.map((item) => (
+              <button key={item.id} type="button" className={item.id === activeBoardId ? 'is-current' : ''} onClick={() => { onBoardSwitch(item.id); setIsSwitchOpen(false); }}>
+                <span className="board-switch-swatch" style={getBoardBackgroundStyle(item.background)} />
+                <span>{item.title}</span>
+              </button>
+            ))}
+          </section>
+        )}
+      </div>
     </nav>
   );
 }
