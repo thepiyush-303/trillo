@@ -1416,6 +1416,8 @@ function App() {
           onSave={handleCardUpdate}
           onArchive={handleCardArchive}
           onDelete={handleCardDelete}
+          onCompleteToggle={handleCardCompleteToggle}
+          labels={inboxLabels}
         />
       )}
       {selectedInboxCard && (
@@ -1426,6 +1428,8 @@ function App() {
           onSave={handleInboxModalSave}
           onArchive={handleInboxArchive}
           onDelete={handleInboxDelete}
+          onCompleteToggle={handleInboxCompleteToggle}
+          labels={inboxLabels}
         />
       )}
     </main>
@@ -2268,7 +2272,6 @@ function Board({
     <section className="board-shell" style={getBoardBackgroundStyle(board.background)}>
       <BoardHeader board={board} onBoardTitleChange={onBoardTitleChange} onBoardBackgroundChange={onBoardBackgroundChange} onArchivedCardsOpen={onArchivedCardsOpen} archivedCardsCount={archivedCardsCount} />
       <div className="board-canvas">
-        <p className="board-status">{status}</p>
         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
           <SortableContext items={listIds} strategy={horizontalListSortingStrategy}>
             <div className="list-row">
@@ -3111,9 +3114,18 @@ function BoardCard({ card, listId, labels, onCardOpen, onCardDrop, onCardUpdate,
     );
   }
 
+  const hasImageCover = cardCover?.type === 'image' || typeof card.cover === 'string';
+  const hasSolidCover = cardCover?.type === 'color';
+  const boardCardClassName = [
+    'board-card draggable-card',
+    hasImageCover || hasSolidCover ? 'has-cover' : '',
+    hasImageCover ? 'has-image-cover' : '',
+    hasSolidCover ? 'has-solid-cover' : ''
+  ].filter(Boolean).join(' ');
+
   return (
     <>
-      <article className="board-card draggable-card" draggable role="button" tabIndex="0" onPointerDown={(event) => event.stopPropagation()} onDragStart={handleDragStart} onDragOver={(event) => event.preventDefault()} onDrop={handleDrop} onClick={() => onCardOpen(card.id)} onKeyDown={(event) => event.key === 'Enter' && onCardOpen(card.id)}>
+      <article className={boardCardClassName} draggable role="button" tabIndex="0" onPointerDown={(event) => event.stopPropagation()} onDragStart={handleDragStart} onDragOver={(event) => event.preventDefault()} onDrop={handleDrop} onClick={() => onCardOpen(card.id)} onKeyDown={(event) => event.key === 'Enter' && onCardOpen(card.id)}>
       <button className={card.completed || card.done ? 'board-complete-dot is-complete' : 'board-complete-dot'} aria-label="Mark complete" onClick={handleCompleteClick} />
       {(card.completed || card.done) && (
         <button className="card-archive-button" aria-label="Archive card" onClick={handleArchiveClick}><ArchiveCardIcon /></button>
@@ -3206,18 +3218,46 @@ function ArchivedCardsModal({ cards, onClose, onRestore, onDelete }) {
   );
 }
 
-// Renders the modal used to edit card title and description.
-function CardModal({ card, contextLabel, onClose, onSave, onArchive, onDelete }) {
+// Renders the Trello-style modal used to edit card details.
+function CardModal({ card, contextLabel, onClose, onSave, onArchive, onDelete, onCompleteToggle, labels = [] }) {
   const [title, setTitle] = useState(card.title);
   const [description, setDescription] = useState(card.description || '');
+  const [draftLabels, setDraftLabels] = useState(card.labels || []);
+  const [draftDue, setDraftDue] = useState({
+    dueDate: card.dueDate || '',
+    dueTime: card.dueTime || '',
+    isCompleted: Boolean(card.isCompleted || card.dueDateCompleted),
+    dueDateCompleted: Boolean(card.isCompleted || card.dueDateCompleted),
+    dueDateReminder: card.dueDateReminder || card.dueReminder || '1 Day before',
+    dueDateRecurring: card.dueDateRecurring || card.dueRecurring || 'Never',
+    dueReminder: card.dueDateReminder || card.dueReminder || '1 Day before',
+    dueRecurring: card.dueDateRecurring || card.dueRecurring || 'Never'
+  });
+  const [draftCover, setDraftCover] = useState(typeof card.cover === 'object' ? card.cover : null);
+  const [isLabelPickerOpen, setIsLabelPickerOpen] = useState(false);
+  const [isDatesPanelOpen, setIsDatesPanelOpen] = useState(false);
+  const [isCoverPanelOpen, setIsCoverPanelOpen] = useState(false);
+  const isComplete = Boolean(card.completed || card.done);
+  const modalCard = { ...card, ...draftDue, labels: draftLabels, cover: draftCover };
 
   useEffect(() => {
     setTitle(card.title);
     setDescription(card.description || '');
+    setDraftLabels(card.labels || []);
+    setDraftDue({
+      dueDate: card.dueDate || '',
+      dueTime: card.dueTime || '',
+      isCompleted: Boolean(card.isCompleted || card.dueDateCompleted),
+      dueDateCompleted: Boolean(card.isCompleted || card.dueDateCompleted),
+      dueDateReminder: card.dueDateReminder || card.dueReminder || '1 Day before',
+      dueDateRecurring: card.dueDateRecurring || card.dueRecurring || 'Never',
+      dueReminder: card.dueDateReminder || card.dueReminder || '1 Day before',
+      dueRecurring: card.dueDateRecurring || card.dueRecurring || 'Never'
+    });
+    setDraftCover(typeof card.cover === 'object' ? card.cover : null);
   }, [card]);
 
   useEffect(() => {
-    // Closes the card modal when the user presses Escape.
     function handleEscape(event) {
       if (event.key === 'Escape') {
         onClose();
@@ -3231,39 +3271,153 @@ function CardModal({ card, contextLabel, onClose, onSave, onArchive, onDelete })
     };
   }, [onClose]);
 
-  // Saves card modal edits and closes the modal.
-  function handleSubmit(event) {
-    event.preventDefault();
+  function toggleDraftLabel(labelId) {
+    setDraftLabels((currentLabels) => (
+      currentLabels.includes(labelId)
+        ? currentLabels.filter((id) => id !== labelId)
+        : [...currentLabels, labelId]
+    ));
+  }
+
+  function saveDueDate(dateData) {
+    setDraftDue({
+      ...dateData,
+      isCompleted: Boolean(dateData.isCompleted),
+      dueDateCompleted: Boolean(dateData.isCompleted),
+      dueReminder: dateData.dueDateReminder,
+      dueRecurring: dateData.dueDateRecurring
+    });
+    setIsDatesPanelOpen(false);
+  }
+
+  function removeDueDate() {
+    setDraftDue({
+      dueDate: '',
+      dueTime: '',
+      isCompleted: false,
+      dueDateCompleted: false,
+      dueDateReminder: '1 Day before',
+      dueDateRecurring: 'Never',
+      dueReminder: '1 Day before',
+      dueRecurring: 'Never'
+    });
+    setIsDatesPanelOpen(false);
+  }
+
+  function saveCover(cover) {
+    setDraftCover(cover);
+    setIsCoverPanelOpen(false);
+  }
+
+  function removeCover() {
+    setDraftCover(null);
+    setIsCoverPanelOpen(false);
+  }
+
+  function handleSubmit() {
     const nextTitle = title.trim();
 
     if (!nextTitle) {
       return;
     }
 
-    onSave(card.id, { title: nextTitle, description });
+    onSave(card.id, {
+      title: nextTitle,
+      description,
+      labels: draftLabels,
+      cover: draftCover,
+      ...draftDue
+    });
     onClose();
   }
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <form className="card-modal" onSubmit={handleSubmit} onClick={(event) => event.stopPropagation()}>
-        <span className="modal-context-label">{contextLabel}</span>
-        <div className="modal-header">
-          <input className="modal-title-input" value={title} onChange={(event) => setTitle(event.target.value)} autoFocus />
-          <button type="button" className="icon-button" aria-label="Close card" onClick={onClose}>×</button>
+    <div className="modal-backdrop card-detail-backdrop" onMouseDown={onClose}>
+      <section className="card-detail-modal" onMouseDown={(event) => event.stopPropagation()}>
+        <div className={draftCover || typeof card.cover === 'string' ? 'card-detail-cover has-cover' : 'card-detail-cover'}>
+          {draftCover && <CardCoverDisplay cover={draftCover} />}
+          {!draftCover && typeof card.cover === 'string' && <CardCover variant={card.cover} />}
+          <span className="modal-context-label card-detail-context">{contextLabel}</span>
+          <div className="card-detail-top-actions">
+            <button type="button" className="card-detail-icon-button" aria-label="Change cover" title="Cover" onClick={() => setIsCoverPanelOpen(true)}>▧</button>
+            <button type="button" className="card-detail-close" aria-label="Close card" onClick={onClose}>x</button>
+          </div>
         </div>
 
-        <label className="modal-field">
-          <span>Description</span>
-          <textarea value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Add a more detailed description..." />
-        </label>
+        <div className="card-detail-body">
+          <main className="card-detail-main">
+            <div className="card-detail-title-row">
+              <button
+                type="button"
+                className={isComplete ? 'card-detail-complete is-complete' : 'card-detail-complete'}
+                aria-label={isComplete ? 'Mark card incomplete' : 'Mark card complete'}
+                onClick={() => onCompleteToggle?.(card.id)}
+              />
+              <input className="card-detail-title-input" value={title} onChange={(event) => setTitle(event.target.value)} autoFocus />
+            </div>
 
-        <div className="modal-actions">
-          <button type="submit" className="primary-action">Save</button>
-          <button type="button" className="quiet-action" onClick={() => onArchive(card.id)}>Archive</button>
-          <button type="button" className="danger-action" onClick={() => onDelete(card.id)}>Delete</button>
+            <div className="card-detail-command-row">
+              <button type="button" onClick={() => setIsLabelPickerOpen((isOpen) => !isOpen)}>+ Labels</button>
+              <button type="button" onClick={() => setIsDatesPanelOpen(true)}>◷ Due date</button>
+              <button type="button" onClick={() => setIsCoverPanelOpen(true)}>▧ Cover</button>
+            </div>
+
+            {isLabelPickerOpen && (
+              <section className="card-detail-label-picker">
+                <div className="popover-header"><span>Labels</span><button type="button" onClick={() => setIsLabelPickerOpen(false)}>x</button></div>
+                {labels.map((label) => (
+                  <label className="card-detail-label-option" key={label.id}>
+                    <input type="checkbox" checked={draftLabels.includes(label.id)} onChange={() => toggleDraftLabel(label.id)} />
+                    <span style={{ '--label-color': label.color }}>{label.name || 'Label'}</span>
+                  </label>
+                ))}
+              </section>
+            )}
+
+            {(draftLabels.length > 0 || draftDue.dueDate) && (
+              <div className="card-detail-fields">
+                {draftLabels.length > 0 && (
+                  <section>
+                    <h3>Labels</h3>
+                    <div className="card-detail-label-row">
+                      {draftLabels.map((labelValue) => {
+                        const label = resolveCardLabel(labelValue, labels);
+                        return label ? <span key={label.id || label.color} style={{ '--label-color': label.color }}>{label.name || ''}</span> : null;
+                      })}
+                      <button type="button" onClick={() => setIsLabelPickerOpen(true)}>+</button>
+                    </div>
+                  </section>
+                )}
+                {draftDue.dueDate && (
+                  <section>
+                    <h3>Due date</h3>
+                    <DueDateBadge card={modalCard} onEditDueDate={() => setIsDatesPanelOpen(true)} />
+                  </section>
+                )}
+              </div>
+            )}
+
+            <label className="card-detail-description">
+              <span>☰ Description</span>
+              <textarea value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Add a more detailed description..." />
+            </label>
+
+            <div className="card-detail-actions">
+              <button type="button" className="primary-action" onClick={handleSubmit}>Save</button>
+              <button type="button" className="quiet-action" onClick={onClose}>Cancel</button>
+              <button type="button" className="quiet-action" onClick={() => onArchive(card.id)}>Archive</button>
+              <button type="button" className="danger-action" onClick={() => onDelete(card.id)}>Delete</button>
+            </div>
+          </main>
         </div>
-      </form>
+
+        {isCoverPanelOpen && (
+          <CardCoverEditor card={modalCard} onSave={saveCover} onRemove={removeCover} onClose={() => setIsCoverPanelOpen(false)} />
+        )}
+        {isDatesPanelOpen && (
+          <DueDateEditor card={modalCard} onClose={() => setIsDatesPanelOpen(false)} onSave={saveDueDate} onRemove={removeDueDate} />
+        )}
+      </section>
     </div>
   );
 }

@@ -420,7 +420,7 @@ inboxRouter.post('/inbox-labels', createInboxLabel);
 inboxRouter.patch('/inbox-labels/:labelId', updateInboxLabel);
 inboxRouter.get('/inbox-cards', getInboxCards);
 inboxRouter.post('/inbox-cards', createInboxCard);
+inboxRouter.patch('/inbox-cards/reorder', reorderInboxCards);
 inboxRouter.patch('/inbox-cards/:inboxCardId', updateInboxCard);
 inboxRouter.delete('/inbox-cards/:inboxCardId', deleteInboxCard);
-inboxRouter.patch('/inbox-cards/reorder', reorderInboxCards);
 inboxRouter.post('/inbox-cards/:inboxCardId/convert', convertInboxCard);
