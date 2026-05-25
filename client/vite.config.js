@@ -6,7 +6,7 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/api': 'https://trillo-client.vercel.app'
+      '/api': 'http://localhost:4000'
     }
   }
 });

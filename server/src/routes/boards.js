@@ -43,7 +43,7 @@ function mapList(row, index = 0) {
     id: row.id,
     title: row.title,
     position: row.position,
-    accent: listAccents[index % listAccents.length],
+    accent: row.accent || listAccents[index % listAccents.length],
     cards: []
   };
 }
@@ -66,6 +66,8 @@ function mapCard(row) {
     dueRecurring: row.due_date_recurring || 'Never',
     cover: row.cover || null,
     archived: row.archived,
+    completed: Boolean(row.completed),
+    done: Boolean(row.completed),
     labels: Array.isArray(row.labels) ? row.labels : []
   };
 }
@@ -133,6 +135,33 @@ function readBackground(request) {
   }
 
   return null;
+}
+
+// Reads clean inline card labels from request bodies.
+function readLabels(request) {
+  const labels = request.body?.labels;
+
+  if (!Array.isArray(labels)) {
+    return [];
+  }
+
+  return labels
+    .map((label) => {
+      if (typeof label === "string") {
+        return label;
+      }
+
+      if (label && typeof label === "object") {
+        return {
+          id: String(label.id || label.color || "").trim(),
+          name: String(label.name || ""),
+          color: String(label.color || "#579dff")
+        };
+      }
+
+      return null;
+    })
+    .filter(Boolean);
 }
 
 // Converts an inbox database row into the client inbox card shape.
@@ -207,7 +236,11 @@ async function createBoard(request, response) {
     return;
   }
 
-  const result = await pool.query('insert into boards (title) values ($1) returning id, title, background', [title]);
+  const background = readBackground(request);
+  const result = await pool.query(
+    'insert into boards (title, background) values ($1, $2::jsonb) returning id, title, background',
+    [title, background ? JSON.stringify(background) : null]
+  );
   response.status(201).json({ board: mapBoard(result.rows[0]) });
 }
 
@@ -222,11 +255,11 @@ async function getBoard(request, response) {
   }
 
   const listResult = await pool.query(
-    'select id, board_id, title, position from lists where board_id = $1 order by position asc, id asc',
+    'select id, board_id, title, position, accent from lists where board_id = $1 order by position asc, id asc',
     [boardId]
   );
   const cardsResult = await pool.query(
-    `select cards.id, cards.list_id, cards.title, cards.description, cards.position, cards.due_date, cards.due_time, cards.due_date_completed, cards.due_date_reminder, cards.due_date_recurring, cards.cover, cards.archived, cards.labels
+    `select cards.id, cards.list_id, cards.title, cards.description, cards.position, cards.due_date, cards.due_time, cards.due_date_completed, cards.due_date_reminder, cards.due_date_recurring, cards.cover, cards.archived, cards.completed, cards.labels
      from cards
      join lists on lists.id = cards.list_id
      where lists.board_id = $1 and cards.archived = false
@@ -274,7 +307,7 @@ async function getBoard(request, response) {
 // Lists archived cards for one board from the durable archive table.
 async function getArchivedCards(request, response) {
   const result = await pool.query(
-    `select cards.id, cards.list_id, cards.title, cards.description, cards.position, cards.due_date, cards.due_time, cards.due_date_completed, cards.due_date_reminder, cards.due_date_recurring, cards.cover, cards.archived, cards.labels,
+    `select cards.id, cards.list_id, cards.title, cards.description, cards.position, cards.due_date, cards.due_time, cards.due_date_completed, cards.due_date_reminder, cards.due_date_recurring, cards.cover, cards.archived, cards.completed, cards.labels,
             archived_cards.original_list_id, archived_cards.original_position, archived_cards.archived_at
      from archived_cards
      join cards on cards.id = archived_cards.card_id
@@ -310,7 +343,7 @@ async function restoreCard(request, response) {
     const archive = archiveResult.rows[0];
     const result = await client.query(
       `update cards set archived = false, list_id = $1, position = $2, updated_at = now()
-       where id = $3 returning id, list_id, title, description, position, due_date, due_time, due_date_completed, due_date_reminder, due_date_recurring, cover, archived, labels`,
+       where id = $3 returning id, list_id, title, description, position, due_date, due_time, due_date_completed, due_date_reminder, due_date_recurring, cover, archived, completed, labels`,
       [archive.original_list_id, archive.original_position, archive.card_id]
     );
 
@@ -375,11 +408,12 @@ async function createList(request, response) {
   }
 
   const position = await getNextListPosition(request.params.boardId);
+  const accent = request.body?.accent ? String(request.body.accent) : null;
   const result = await pool.query(
-    `insert into lists (board_id, title, position)
-     values ($1, $2, $3)
-     returning id, board_id, title, position`,
-    [request.params.boardId, title, position]
+    `insert into lists (board_id, title, position, accent)
+     values ($1, $2, $3, $4)
+     returning id, board_id, title, position, accent`,
+    [request.params.boardId, title, position, accent]
   );
 
   response.status(201).json({ list: mapList(result.rows[0]) });
@@ -409,19 +443,30 @@ async function reorderLists(request, response) {
   }
 }
 
-// Updates a list title.
+// Updates editable list fields.
 async function updateList(request, response) {
-  const title = readTitle(request);
+  const hasTitle = Object.prototype.hasOwnProperty.call(request.body || {}, "title");
+  const hasAccent = Object.prototype.hasOwnProperty.call(request.body || {}, "accent");
+  const title = hasTitle ? readTitle(request) : null;
+  const accent = hasAccent && request.body.accent ? String(request.body.accent) : null;
 
-  if (!title) {
-    sendError(response, 400, 'List title is required.');
+  if (hasTitle && !title) {
+    sendError(response, 400, "List title is required.");
+    return;
+  }
+
+  if (!hasTitle && !hasAccent) {
+    sendError(response, 400, "List title or accent is required.");
     return;
   }
 
   const result = await pool.query(
-    `update lists set title = $1, updated_at = now()
-     where id = $2 returning id, board_id, title, position`,
-    [title, request.params.listId]
+    `update lists set
+       title = coalesce($1, title),
+       accent = case when $2 then $3 else accent end,
+       updated_at = now()
+     where id = $4 returning id, board_id, title, position, accent`,
+    [title, hasAccent, accent, request.params.listId]
   );
 
   if (result.rowCount === 0) {
@@ -457,7 +502,7 @@ async function createCard(request, response) {
   const result = await pool.query(
     `insert into cards (list_id, title, position)
      values ($1, $2, $3)
-     returning id, list_id, title, description, position, due_date, due_time, due_date_completed, due_date_reminder, due_date_recurring, cover, archived, labels`,
+     returning id, list_id, title, description, position, due_date, due_time, due_date_completed, due_date_reminder, due_date_recurring, cover, archived, completed, labels`,
     [request.params.listId, title, position]
   );
 
@@ -503,6 +548,8 @@ async function updateCard(request, response) {
   const dueDateReminder = String(request.body?.dueDateReminder || request.body?.dueReminder || '1 Day before');
   const dueDateRecurring = String(request.body?.dueDateRecurring || request.body?.dueRecurring || 'Never');
   const cover = readCover(request);
+  const completed = Boolean(request.body?.completed || request.body?.done);
+  const labels = readLabels(request);
 
   if (!title) {
     sendError(response, 400, 'Card title is required.');
@@ -512,8 +559,8 @@ async function updateCard(request, response) {
   const result = await pool.query(
     `update cards set title = $1, description = $2, due_date = $3, due_time = $4,
        due_date_completed = $5, due_date_reminder = $6, due_date_recurring = $7,
-       cover = $8::jsonb, updated_at = now()
-     where id = $9 returning id, list_id, title, description, position, due_date, due_time, due_date_completed, due_date_reminder, due_date_recurring, cover, archived, labels`,
+       cover = $8::jsonb, labels = $9::jsonb, completed = $10, updated_at = now()
+     where id = $11 returning id, list_id, title, description, position, due_date, due_time, due_date_completed, due_date_reminder, due_date_recurring, cover, archived, completed, labels`,
     [
       title,
       description,
@@ -523,6 +570,8 @@ async function updateCard(request, response) {
       dueDateReminder,
       dueDateRecurring,
       cover ? JSON.stringify(cover) : null,
+      JSON.stringify(labels),
+      completed,
       request.params.cardId
     ]
   );
@@ -588,7 +637,7 @@ async function archiveCard(request, response) {
     );
 
     const archivedResult = await client.query(
-      `select cards.id, cards.list_id, cards.title, cards.description, cards.position, cards.due_date, cards.due_time, cards.due_date_completed, cards.due_date_reminder, cards.due_date_recurring, cards.cover, cards.archived, cards.labels,
+      `select cards.id, cards.list_id, cards.title, cards.description, cards.position, cards.due_date, cards.due_time, cards.due_date_completed, cards.due_date_reminder, cards.due_date_recurring, cards.cover, cards.archived, cards.completed, cards.labels,
               archived_cards.original_list_id, archived_cards.original_position, archived_cards.archived_at
        from archived_cards
        join cards on cards.id = archived_cards.card_id

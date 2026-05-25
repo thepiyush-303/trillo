@@ -143,6 +143,8 @@ function mapCard(row) {
     dueRecurring: row.due_date_recurring || 'Never',
     cover: row.cover || null,
     archived: row.archived,
+    completed: Boolean(row.completed),
+    done: Boolean(row.completed),
     labels: Array.isArray(row.labels) ? row.labels : []
   };
 }
@@ -324,7 +326,7 @@ async function convertInboxCard(request, response) {
     const cardResult = await client.query(
       `insert into cards (list_id, title, description, labels, position, due_date, due_time, due_date_completed, due_date_reminder, due_date_recurring, cover)
        values ($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9, $10, $11::jsonb)
-       returning id, list_id, title, description, position, due_date, due_time, due_date_completed, due_date_reminder, due_date_recurring, cover, archived, labels`,
+       returning id, list_id, title, description, position, due_date, due_time, due_date_completed, due_date_reminder, due_date_recurring, cover, archived, completed, labels`,
       [
         targetListId,
         inboxCard.title,

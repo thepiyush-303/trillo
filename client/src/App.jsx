@@ -157,7 +157,7 @@ function createLocalId(prefix) {
 
 // Checks whether an entity id was created only in the browser.
 function isLocalId(id) {
-  return String(id).startsWith('demo-') || String(id).startsWith('list-') || String(id).startsWith('card-') || String(id).startsWith('inbox-');
+  return String(id).startsWith('demo-') || String(id).startsWith('board-') || String(id).startsWith('list-') || String(id).startsWith('card-') || String(id).startsWith('inbox-');
 }
 
 // Adds display accents to lists that came from the API without UI-only styling.
@@ -169,7 +169,13 @@ function hydrateBoard(rawBoard) {
     lists: rawBoard.lists.map((list, index) => ({
       ...list,
       accent: list.accent || listAccents[index % listAccents.length],
-      cards: list.cards || []
+      cards: (list.cards || []).map((card) => ({
+        ...card,
+        completed: Boolean(card.completed || card.done),
+        done: Boolean(card.completed || card.done),
+        labels: Array.isArray(card.labels) ? card.labels : [],
+        cover: card.cover || null
+      }))
     }))
   };
 }
@@ -565,7 +571,7 @@ function App() {
   const [status, setStatus] = useState('Using local demo data until the API is connected.');
 
   useEffect(() => {
-    loadInitialBoard(setBoard, setStatus);
+    loadInitialBoard(setBoard, setBoards, setStatus);
     loadInitialInbox(setInboxCards, setInboxLabels);
   }, []);
 
@@ -634,27 +640,52 @@ function App() {
     }, 2600);
   }
 
-  // Creates and opens a new local board while keeping Inbox state unchanged.
-  function handleBoardCreate(boardDraft) {
+  // Creates and opens a new board locally first, then replaces it with the saved API board.
+  async function handleBoardCreate(boardDraft) {
     const nextBoard = createLocalBoard(boardDraft);
     setBoards((currentBoards) => currentBoards.map((item) => (item.id === board.id ? board : item)).concat(nextBoard));
     setBoard(nextBoard);
     setArchivedBoardCards([]);
     setVisibleViews((current) => ({ ...current, board: true }));
+
+    try {
+      const data = await apiRequest('/boards', {
+        method: 'POST',
+        body: JSON.stringify({ title: nextBoard.title, background: nextBoard.background })
+      });
+      const savedBoard = hydrateBoard(data.board);
+      setBoards((currentBoards) => currentBoards.map((item) => (item.id === nextBoard.id ? savedBoard : item)));
+      setBoard(savedBoard);
+      setStatus('Board created and saved.');
+    } catch (error) {
+      setStatus('Board was created locally, but the API save failed.');
+    }
   }
 
   // Switches the active board while preserving the shared Inbox.
-  function handleBoardSwitch(boardId) {
+  async function handleBoardSwitch(boardId) {
     const nextBoard = boards.find((item) => item.id === boardId);
 
     if (!nextBoard || nextBoard.id === board.id) {
       return;
     }
 
+    const previousBoard = board;
     setBoards((currentBoards) => currentBoards.map((item) => (item.id === board.id ? board : item)));
     setBoard(nextBoard);
     setSelectedCardId(null);
     setVisibleViews((current) => ({ ...current, board: true }));
+
+    try {
+      if (!isLocalId(boardId)) {
+        const loadedBoard = await loadBoardById(boardId);
+        setBoard(loadedBoard);
+        setBoards((currentBoards) => currentBoards.map((item) => (item.id === loadedBoard.id ? loadedBoard : item)));
+      }
+    } catch (error) {
+      setBoard(previousBoard);
+      setStatus('Could not load selected board. Check the API connection.');
+    }
   }
 
   // Updates the board title locally and through the API when available.
@@ -708,11 +739,11 @@ function App() {
       if (!isLocalId(board.id)) {
         const data = await apiRequest(`/boards/${board.id}/lists`, {
           method: 'POST',
-          body: JSON.stringify({ title })
+          body: JSON.stringify({ title, accent: localList.accent })
         });
         setBoard((current) => ({
           ...current,
-          lists: current.lists.map((list) => (list.id === localList.id ? data.list : list))
+          lists: current.lists.map((list) => (list.id === localList.id ? { ...data.list, accent: data.list.accent || localList.accent, cards: [] } : list))
         }));
       }
     } catch (error) {
@@ -730,11 +761,27 @@ function App() {
     });
 
     try {
-      if (!isLocalId(listId) && Object.prototype.hasOwnProperty.call(normalizedUpdates, 'title')) {
-        await apiRequest(`/lists/${listId}`, {
-          method: 'PATCH',
-          body: JSON.stringify({ title: normalizedUpdates.title })
-        });
+      if (!isLocalId(listId)) {
+        const payload = {};
+
+        if (Object.prototype.hasOwnProperty.call(normalizedUpdates, 'title')) {
+          payload.title = normalizedUpdates.title;
+        }
+
+        if (Object.prototype.hasOwnProperty.call(normalizedUpdates, 'accent')) {
+          payload.accent = normalizedUpdates.accent;
+        }
+
+        if (Object.keys(payload).length > 0) {
+          const data = await apiRequest(`/lists/${listId}`, {
+            method: 'PATCH',
+            body: JSON.stringify(payload)
+          });
+          setBoard((current) => ({
+            ...current,
+            lists: current.lists.map((list) => (list.id === listId ? { ...list, ...data.list, cards: list.cards } : list))
+          }));
+        }
       }
     } catch (error) {
       setBoard(previousBoard);
@@ -789,11 +836,12 @@ function App() {
     handleListReorder(listId, board.lists[sourceIndex + 1].id);
   }
 
-  // Sorts cards inside a list by the selected criterion.
-  function handleListSort(listId, sortMode = 'title') {
-    setBoard((current) => ({
-      ...current,
-      lists: current.lists.map((list) => {
+  // Sorts cards inside a list by the selected criterion and persists the new order.
+  async function handleListSort(listId, sortMode = 'title') {
+    const previousBoard = board;
+    const nextBoard = {
+      ...board,
+      lists: board.lists.map((list) => {
         if (list.id !== listId) {
           return list;
         }
@@ -808,11 +856,31 @@ function App() {
 
         return { ...list, cards };
       })
-    }));
+    };
+    setBoard(nextBoard);
+
+    try {
+      const cardIds = getCardIdsForList(nextBoard, listId);
+
+      if (!isLocalId(listId) && cardIds.every((cardId) => !isLocalId(cardId))) {
+        await apiRequest('/cards/reorder', {
+          method: 'PATCH',
+          body: JSON.stringify({
+            sourceListId: listId,
+            targetListId: listId,
+            sourceCardIds: cardIds,
+            targetCardIds: cardIds
+          })
+        });
+      }
+    } catch (error) {
+      setBoard(previousBoard);
+      setStatus('Could not save sorted card order. Check the API connection.');
+    }
   }
 
   // Moves all cards from a list into the next list to the right.
-  function handleListMoveCardsRight(listId) {
+  async function handleListMoveCardsRight(listId) {
     const sourceIndex = board.lists.findIndex((list) => list.id === listId);
 
     if (sourceIndex === -1 || sourceIndex === board.lists.length - 1) {
@@ -826,8 +894,9 @@ function App() {
       return;
     }
 
+    const previousBoard = board;
     const targetList = board.lists[sourceIndex + 1];
-    setBoard({
+    const nextBoard = {
       ...board,
       lists: board.lists.map((list) => {
         if (list.id === sourceList.id) {
@@ -840,17 +909,38 @@ function App() {
 
         return list;
       })
-    });
+    };
+    setBoard(nextBoard);
+
+    try {
+      const movedCardIds = sourceList.cards.map((card) => card.id);
+
+      if (!isLocalId(sourceList.id) && !isLocalId(targetList.id) && movedCardIds.every((cardId) => !isLocalId(cardId))) {
+        await apiRequest('/cards/reorder', {
+          method: 'PATCH',
+          body: JSON.stringify({
+            sourceListId: sourceList.id,
+            targetListId: targetList.id,
+            sourceCardIds: [],
+            targetCardIds: getCardIdsForList(nextBoard, targetList.id)
+          })
+        });
+      }
+    } catch (error) {
+      setBoard(previousBoard);
+      setStatus('Could not save moved cards. Check the API connection.');
+    }
   }
 
-  // Archives all cards in a list locally and keeps them restorable from the archive modal.
-  function handleListArchiveCards(listId) {
+  // Archives all cards in a list and persists the archive rows when possible.
+  async function handleListArchiveCards(listId) {
     const sourceList = board.lists.find((list) => list.id === listId);
 
     if (!sourceList || sourceList.cards.length === 0) {
       return;
     }
 
+    const previousBoard = board;
     const archivedCards = sourceList.cards.map((card) => ({
       ...card,
       archived: true,
@@ -866,6 +956,15 @@ function App() {
       ...board,
       lists: board.lists.map((list) => (list.id === listId ? { ...list, cards: [] } : list))
     });
+
+    try {
+      const serverCards = sourceList.cards.filter((card) => !isLocalId(card.id));
+      await Promise.all(serverCards.map((card) => apiRequest(`/cards/${card.id}/archive`, { method: 'PATCH' })));
+    } catch (error) {
+      setBoard(previousBoard);
+      setArchivedBoardCards((cards) => cards.filter((card) => !archivedCards.some((archivedCard) => String(archivedCard.id) === String(card.id))));
+      setStatus('Could not archive all cards. Check the API connection.');
+    }
   }
 
   // Toggles a list between the expanded and collapsed Trello-style states.
@@ -935,7 +1034,10 @@ function App() {
             dueDateCompleted: Boolean(updatedCard.isCompleted || updatedCard.dueDateCompleted),
             dueDateReminder: updatedCard.dueDateReminder || updatedCard.dueReminder || '1 Day before',
             dueDateRecurring: updatedCard.dueDateRecurring || updatedCard.dueRecurring || 'Never',
-            cover: updatedCard.cover || null
+            cover: updatedCard.cover || null,
+            labels: updatedCard.labels || [],
+            completed: Boolean(updatedCard.completed || updatedCard.done),
+            done: Boolean(updatedCard.completed || updatedCard.done)
           })
         });
         setBoard((current) => replaceCard(current, data.card));
@@ -995,8 +1097,8 @@ function App() {
     }
   }
 
-  // Toggles the visual completed state on a board card.
-  function handleCardCompleteToggle(cardId) {
+  // Toggles the completed state on a board card and saves it when possible.
+  async function handleCardCompleteToggle(cardId) {
     const existing = findCard(board, cardId)?.card;
 
     if (!existing) {
@@ -1004,7 +1106,7 @@ function App() {
     }
 
     const isComplete = !(existing.completed || existing.done);
-    setBoard(replaceCard(board, { ...existing, completed: isComplete, done: isComplete }));
+    await handleCardUpdate(cardId, { completed: isComplete, done: isComplete });
   }
 
   // Archives a card locally and through the API when available.
@@ -1561,30 +1663,32 @@ function App() {
   );
 }
 
+// Loads a full API board with lists and cards.
+async function loadBoardById(boardId) {
+  const boardData = await apiRequest(`/boards/${boardId}`);
+  return hydrateBoard(boardData.board);
+}
+
 // Loads the first API board or keeps demo data when the backend is unavailable.
-async function loadInitialBoard(setBoard, setStatus) {
+async function loadInitialBoard(setBoard, setBoards, setStatus) {
   try {
     const boardsData = await apiRequest('/boards');
-    let boardSummary = boardsData.boards[0];
+    let boardSummaries = boardsData.boards || [];
+    let boardSummary = boardSummaries[0];
 
     if (!boardSummary) {
       const createData = await apiRequest('/boards', {
         method: 'POST',
-        body: JSON.stringify({ title: 'My Trello board' })
+        body: JSON.stringify({ title: 'My Trello board', background: DEFAULT_BOARD_BACKGROUND })
       });
       boardSummary = createData.board;
+      boardSummaries = [boardSummary];
     }
 
-    const boardData = await apiRequest(`/boards/${boardSummary.id}`);
-    const hydratedBoard = hydrateBoard(boardData.board);
-
-    if (hydratedBoard.lists.length === 0) {
-      setBoard({ ...DEMO_BOARD, id: boardSummary.id, title: hydratedBoard.title });
-      setStatus('API is connected, but the database has no seeded lists yet. Using demo board layout.');
-      return;
-    }
-
+    setBoards(boardSummaries.map((summary) => hydrateBoard(summary)));
+    const hydratedBoard = await loadBoardById(boardSummary.id);
     setBoard(hydratedBoard);
+    setBoards((currentBoards) => currentBoards.map((item) => (item.id === hydratedBoard.id ? hydratedBoard : item)));
     setStatus('Connected to API. Changes will persist when PostgreSQL is running.');
   } catch (error) {
     setStatus('Using local demo data until the API is connected.');
