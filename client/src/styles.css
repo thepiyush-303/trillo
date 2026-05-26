@@ -4150,3 +4150,220 @@ body {
   background-size: cover;
   border-radius: 4px;
 }
+
+
+/* Inbox completion control aligned with the card title row. */
+.inbox-title-row {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.inbox-title-row .inbox-complete-dot {
+  position: relative;
+  align-self: center;
+  margin-top: 0;
+  overflow: visible;
+}
+
+.inbox-card:not(:hover):not(:focus-within) .inbox-title-row:not(:has(.inbox-complete-dot.is-complete)) {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.inbox-card:not(:hover):not(:focus-within) .inbox-title-row:not(:has(.inbox-complete-dot.is-complete)) .inbox-card-title {
+  grid-column: 1;
+}
+
+.inbox-card-title.is-done {
+  color: #9fadbc;
+}
+
+.inbox-card.has-cover .inbox-title-row .inbox-complete-dot {
+  margin-top: 0;
+}
+
+.inbox-complete-dot.is-celebrating::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 4px;
+  height: 4px;
+  border-radius: 999px;
+  background: #e2b203;
+  box-shadow: 0 -15px 0 #94c748, 12px -9px 0 #f87168, 15px 2px 0 #579dff, 8px 13px 0 #c97cf4, -8px 13px 0 #f18d13, -15px 2px 0 #4bce97, -12px -9px 0 #6cc3e0;
+  pointer-events: none;
+  transform: translate(-50%, -50%) scale(0.2);
+  animation: inbox-complete-celebration 720ms ease-out forwards;
+}
+
+@keyframes inbox-complete-celebration {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.2) rotate(0deg);
+  }
+
+  28% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1) rotate(16deg);
+  }
+
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(1.35) rotate(40deg);
+  }
+}
+
+
+/* Shared card stack layout for labels, title rows, due badges, and covers. */
+.inbox-card.draggable-card,
+.board-card.draggable-card {
+  position: relative;
+  display: block;
+  min-height: 62px;
+  padding: 12px 12px 12px;
+  overflow: hidden;
+}
+
+.inbox-card-main {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  padding-right: 62px;
+}
+
+.inbox-label-strip,
+.board-card .label-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0;
+  padding: 0 62px 0 0;
+}
+
+.inbox-title-row,
+.card-title-row {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.inbox-title-row .inbox-complete-dot,
+.card-title-row .board-complete-dot {
+  position: relative;
+  inset: auto;
+  align-self: center;
+  margin: 0;
+  opacity: 1;
+  transform: none;
+}
+
+.inbox-card-title,
+.card-title-row .card-title {
+  min-width: 0;
+  padding: 0;
+}
+
+.inbox-card-title.is-done,
+.card-title-row .card-title.is-done {
+  color: #9fadbc;
+}
+
+.inbox-due-row,
+.card-meta-row {
+  margin: 0;
+  padding: 0;
+}
+
+.inbox-card:not(:hover):not(:focus-within) .inbox-title-row:not(:has(.inbox-complete-dot.is-complete)),
+.board-card:not(:hover):not(:focus-within) .card-title-row:not(:has(.board-complete-dot.is-complete)) {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.inbox-card:not(:hover):not(:focus-within) .inbox-title-row:not(:has(.inbox-complete-dot.is-complete)) .inbox-complete-dot,
+.board-card:not(:hover):not(:focus-within) .card-title-row:not(:has(.board-complete-dot.is-complete)) .board-complete-dot {
+  display: none;
+}
+
+.inbox-card:not(:hover):not(:focus-within) .inbox-title-row:not(:has(.inbox-complete-dot.is-complete)) .inbox-card-title,
+.board-card:not(:hover):not(:focus-within) .card-title-row:not(:has(.board-complete-dot.is-complete)) .card-title {
+  grid-column: 1;
+}
+
+.board-card:hover .label-row,
+.board-card:hover .card-title,
+.board-card:focus-within .label-row,
+.board-card:focus-within .card-title,
+.board-card:has(.board-complete-dot.is-complete) .label-row,
+.board-card:has(.board-complete-dot.is-complete) .card-title,
+.inbox-card:hover .inbox-card-main,
+.inbox-card:focus-within .inbox-card-main {
+  transform: none;
+}
+
+.inbox-edit-button,
+.card-edit-button,
+.inbox-archive-button,
+.card-archive-button {
+  position: absolute;
+  top: 10px;
+  width: 26px;
+  height: 26px;
+  border-radius: 999px;
+  z-index: 4;
+}
+
+.inbox-edit-button,
+.card-edit-button,
+.inbox-card:has(.inbox-archive-button) .inbox-edit-button {
+  right: 10px;
+}
+
+.inbox-archive-button,
+.card-archive-button {
+  right: 42px;
+}
+
+.inbox-card.has-cover,
+.board-card.has-cover {
+  padding: 0 12px 12px;
+}
+
+.inbox-card.has-cover > .card-cover-solid,
+.inbox-card.has-cover > .card-cover-image,
+.board-card.has-cover > .card-cover-solid,
+.board-card.has-cover > .card-cover-image,
+.board-card.has-cover > .card-cover {
+  display: block;
+  width: calc(100% + 24px);
+  margin: 0 -12px 10px;
+  border-radius: 7px 7px 0 0;
+}
+
+.inbox-card.has-cover > .card-cover-image,
+.board-card.has-image-cover > .card-cover-image,
+.board-card.has-image-cover > .card-cover {
+  height: 176px;
+}
+
+.inbox-card.has-cover > .card-cover-solid,
+.board-card.has-solid-cover > .card-cover-solid {
+  height: 54px;
+}
+
+.inbox-card.has-cover .inbox-card-main,
+.board-card.has-cover .label-row {
+  padding-top: 0;
+}
+
+.inbox-card.has-cover .inbox-edit-button,
+.inbox-card.has-cover .inbox-archive-button,
+.board-card.has-cover .card-edit-button,
+.board-card.has-cover .card-archive-button {
+  top: 10px;
+  background: rgba(34, 39, 43, 0.9);
+}

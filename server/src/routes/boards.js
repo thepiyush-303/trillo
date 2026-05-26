@@ -172,6 +172,17 @@ function mapInboxCard(row) {
     description: row.description,
     position: row.position,
     labels: Array.isArray(row.labels) ? row.labels : [],
+    dueDate: mapDate(row.due_date) || '',
+    dueTime: row.due_time || '',
+    isCompleted: Boolean(row.due_date_completed),
+    dueDateCompleted: Boolean(row.due_date_completed),
+    dueDateReminder: row.due_date_reminder || '1 Day before',
+    dueDateRecurring: row.due_date_recurring || 'Never',
+    dueReminder: row.due_date_reminder || '1 Day before',
+    dueRecurring: row.due_date_recurring || 'Never',
+    cover: row.cover || null,
+    completed: Boolean(row.completed),
+    done: Boolean(row.completed),
     convertedCardId: row.converted_card_id
   };
 }
@@ -664,7 +675,7 @@ async function moveCardToInbox(request, response) {
     await client.query('begin');
 
     const cardResult = await client.query(
-      `select id, title, description, labels
+      `select id, title, description, labels, due_date, due_time, due_date_completed, due_date_reminder, due_date_recurring, cover, completed
        from cards
        where id = $1
        for update`,
@@ -680,10 +691,22 @@ async function moveCardToInbox(request, response) {
     const positionResult = await client.query('select coalesce(max(position), 0) + 1000 as position from inbox_cards');
     const card = cardResult.rows[0];
     const inboxResult = await client.query(
-      `insert into inbox_cards (title, description, labels, position)
-       values ($1, $2, $3::jsonb, $4)
-       returning id, title, description, position, labels, converted_card_id`,
-      [card.title, card.description || '', JSON.stringify(Array.isArray(card.labels) ? card.labels : []), positionResult.rows[0].position]
+      `insert into inbox_cards (title, description, labels, position, due_date, due_time, due_date_completed, due_date_reminder, due_date_recurring, cover, completed)
+       values ($1, $2, $3::jsonb, $4, $5, $6, $7, $8, $9, $10::jsonb, $11)
+       returning id, title, description, position, labels, due_date, due_time, due_date_completed, due_date_reminder, due_date_recurring, cover, completed, converted_card_id`,
+      [
+        card.title,
+        card.description || '',
+        JSON.stringify(Array.isArray(card.labels) ? card.labels : []),
+        positionResult.rows[0].position,
+        card.due_date,
+        card.due_time || '',
+        Boolean(card.due_date_completed),
+        card.due_date_reminder || '1 Day before',
+        card.due_date_recurring || 'Never',
+        card.cover ? JSON.stringify(card.cover) : null,
+        Boolean(card.completed)
+      ]
     );
 
     await client.query('delete from cards where id = $1', [card.id]);

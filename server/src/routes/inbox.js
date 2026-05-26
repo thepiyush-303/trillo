@@ -41,6 +41,8 @@ function mapInboxCard(row) {
     dueReminder: row.due_date_reminder || '1 Day before',
     dueRecurring: row.due_date_recurring || 'Never',
     cover: row.cover || null,
+    completed: Boolean(row.completed),
+    done: Boolean(row.completed),
     convertedCardId: row.converted_card_id
   };
 }
@@ -174,7 +176,7 @@ async function getNextCardPosition(listId) {
 // Lists active inbox cards in saved order.
 async function getInboxCards(_request, response) {
   const result = await pool.query(
-    `select id, title, description, position, labels, due_date, due_time, due_date_completed, due_date_reminder, due_date_recurring, cover, converted_card_id
+    `select id, title, description, position, labels, due_date, due_time, due_date_completed, due_date_reminder, due_date_recurring, cover, completed, converted_card_id
      from inbox_cards
      where converted_card_id is null
      order by position asc, id asc`
@@ -196,9 +198,9 @@ async function createInboxCard(request, response) {
   const dueDateFields = readDueDateFields(request);
   const cover = readCover(request);
   const result = await pool.query(
-    `insert into inbox_cards (title, description, labels, position, due_date, due_time, due_date_completed, due_date_reminder, due_date_recurring, cover)
-     values ($1, $2, $3::jsonb, $4, $5, $6, $7, $8, $9, $10::jsonb)
-     returning id, title, description, position, labels, due_date, due_time, due_date_completed, due_date_reminder, due_date_recurring, cover, converted_card_id`,
+    `insert into inbox_cards (title, description, labels, position, due_date, due_time, due_date_completed, due_date_reminder, due_date_recurring, cover, completed)
+     values ($1, $2, $3::jsonb, $4, $5, $6, $7, $8, $9, $10::jsonb, $11)
+     returning id, title, description, position, labels, due_date, due_time, due_date_completed, due_date_reminder, due_date_recurring, cover, completed, converted_card_id`,
     [
       title,
       String(request.body?.description || ''),
@@ -209,7 +211,8 @@ async function createInboxCard(request, response) {
       dueDateFields.dueDateCompleted,
       dueDateFields.dueDateReminder,
       dueDateFields.dueDateRecurring,
-      cover ? JSON.stringify(cover) : null
+      cover ? JSON.stringify(cover) : null,
+      Boolean(request.body?.completed || request.body?.done)
     ]
   );
 
@@ -231,9 +234,9 @@ async function updateInboxCard(request, response) {
     `update inbox_cards set title = $1, description = $2, labels = $3::jsonb,
        due_date = $4, due_time = $5, due_date_completed = $6,
        due_date_reminder = $7, due_date_recurring = $8, cover = $9::jsonb,
-       updated_at = now()
-     where id = $10 and converted_card_id is null
-     returning id, title, description, position, labels, due_date, due_time, due_date_completed, due_date_reminder, due_date_recurring, cover, converted_card_id`,
+       completed = $10, updated_at = now()
+     where id = $11 and converted_card_id is null
+     returning id, title, description, position, labels, due_date, due_time, due_date_completed, due_date_reminder, due_date_recurring, cover, completed, converted_card_id`,
     [
       title,
       String(request.body?.description || ''),
@@ -244,6 +247,7 @@ async function updateInboxCard(request, response) {
       dueDateFields.dueDateReminder,
       dueDateFields.dueDateRecurring,
       cover ? JSON.stringify(cover) : null,
+      Boolean(request.body?.completed || request.body?.done),
       request.params.inboxCardId
     ]
   );
@@ -305,7 +309,7 @@ async function convertInboxCard(request, response) {
     await client.query('begin');
 
     const inboxResult = await client.query(
-      `select id, title, description, labels, due_date, due_time, due_date_completed, due_date_reminder, due_date_recurring, cover
+      `select id, title, description, labels, due_date, due_time, due_date_completed, due_date_reminder, due_date_recurring, cover, completed
        from inbox_cards
        where id = $1 and converted_card_id is null
        for update`,
@@ -324,8 +328,8 @@ async function convertInboxCard(request, response) {
     );
     const inboxCard = inboxResult.rows[0];
     const cardResult = await client.query(
-      `insert into cards (list_id, title, description, labels, position, due_date, due_time, due_date_completed, due_date_reminder, due_date_recurring, cover)
-       values ($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9, $10, $11::jsonb)
+      `insert into cards (list_id, title, description, labels, position, due_date, due_time, due_date_completed, due_date_reminder, due_date_recurring, cover, completed)
+       values ($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9, $10, $11::jsonb, $12)
        returning id, list_id, title, description, position, due_date, due_time, due_date_completed, due_date_reminder, due_date_recurring, cover, archived, completed, labels`,
       [
         targetListId,
@@ -338,7 +342,8 @@ async function convertInboxCard(request, response) {
         Boolean(inboxCard.due_date_completed),
         inboxCard.due_date_reminder || '1 Day before',
         inboxCard.due_date_recurring || 'Never',
-        inboxCard.cover ? JSON.stringify(inboxCard.cover) : null
+        inboxCard.cover ? JSON.stringify(inboxCard.cover) : null,
+        Boolean(inboxCard.completed)
       ]
     );
 

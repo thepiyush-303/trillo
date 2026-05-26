@@ -190,6 +190,8 @@ function hydrateInboxCards(rawInboxCards) {
     dueTime: card.dueTime || '',
     isCompleted: Boolean(card.isCompleted || card.dueDateCompleted),
     dueDateCompleted: Boolean(card.isCompleted || card.dueDateCompleted),
+    completed: Boolean(card.completed || card.done),
+    done: Boolean(card.completed || card.done),
     dueDateReminder: card.dueDateReminder || card.dueReminder || '1 Day before',
     dueDateRecurring: card.dueDateRecurring || card.dueRecurring || 'Never',
     dueReminder: card.dueDateReminder || card.dueReminder || '1 Day before',
@@ -1196,14 +1198,17 @@ function App() {
             dueDateCompleted: Boolean(updatedCard.isCompleted || updatedCard.dueDateCompleted),
             dueDateReminder: updatedCard.dueDateReminder || updatedCard.dueReminder || '1 Day before',
             dueDateRecurring: updatedCard.dueDateRecurring || updatedCard.dueRecurring || 'Never',
-            cover: updatedCard.cover || null
+            cover: updatedCard.cover || null,
+            completed: Boolean(updatedCard.completed || updatedCard.done),
+            done: Boolean(updatedCard.completed || updatedCard.done)
           })
         });
         const savedCard = hydrateInboxCards([data.inboxCard])[0];
         setInboxCards((current) => replaceInboxCard(current, {
           ...savedCard,
           badges: updatedCard.badges || savedCard.badges,
-          completed: updatedCard.completed || false,
+          completed: Boolean(updatedCard.completed || updatedCard.done),
+          done: Boolean(updatedCard.completed || updatedCard.done),
           dueDate: updatedCard.dueDate || '',
           dueTime: updatedCard.dueTime || '',
           isCompleted: Boolean(updatedCard.isCompleted || updatedCard.dueDateCompleted),
@@ -1269,7 +1274,8 @@ function App() {
       description: foundCard.card.description || '',
       badges: foundCard.card.badges || [],
       labels: foundCard.card.labels || [],
-      completed: foundCard.card.completed || foundCard.card.done || false,
+      completed: Boolean(foundCard.card.completed || foundCard.card.done),
+      done: Boolean(foundCard.card.completed || foundCard.card.done),
       dueDate: foundCard.card.dueDate || '',
       dueTime: foundCard.card.dueTime || '',
       isCompleted: Boolean(foundCard.card.isCompleted || foundCard.card.dueDateCompleted),
@@ -1292,7 +1298,15 @@ function App() {
           body: JSON.stringify({
             title: localInboxCard.title,
             description: localInboxCard.description,
-            labels: localInboxCard.labels
+            labels: localInboxCard.labels,
+            dueDate: localInboxCard.dueDate,
+            dueTime: localInboxCard.dueTime,
+            dueDateCompleted: localInboxCard.dueDateCompleted,
+            dueDateReminder: localInboxCard.dueDateReminder,
+            dueDateRecurring: localInboxCard.dueDateRecurring,
+            cover: localInboxCard.cover,
+            completed: localInboxCard.completed,
+            done: localInboxCard.done
           })
         });
         createdInboxCard = hydrateInboxCards([data.inboxCard])[0];
@@ -1300,6 +1314,7 @@ function App() {
           ...createdInboxCard,
           badges: localInboxCard.badges,
           completed: localInboxCard.completed,
+          done: localInboxCard.done,
           dueDate: localInboxCard.dueDate,
           dueTime: localInboxCard.dueTime,
           isCompleted: localInboxCard.isCompleted,
@@ -1355,7 +1370,8 @@ function App() {
     const inboxCard = inboxCards.find((card) => card.id === inboxCardId);
 
     if (inboxCard) {
-      handleInboxUpdate(inboxCardId, { ...inboxCard, completed: !inboxCard.completed });
+      const isComplete = !Boolean(inboxCard.completed || inboxCard.done);
+      handleInboxUpdate(inboxCardId, { ...inboxCard, completed: isComplete, done: isComplete });
     }
   }
 
@@ -1447,7 +1463,8 @@ function App() {
       title: inboxCard.title,
       description: inboxCard.description || '',
       labels: inboxCard.labels || [],
-      completed: inboxCard.completed || false,
+      completed: Boolean(inboxCard.completed || inboxCard.done),
+      done: Boolean(inboxCard.completed || inboxCard.done),
       dueDate: inboxCard.dueDate || '',
       dueTime: inboxCard.dueTime || '',
       isCompleted: Boolean(inboxCard.isCompleted || inboxCard.dueDateCompleted),
@@ -2117,12 +2134,28 @@ function InboxCard({
   const [isLabelPanelOpen, setIsLabelPanelOpen] = useState(false);
   const [isCoverPanelOpen, setIsCoverPanelOpen] = useState(false);
   const [isDatesPanelOpen, setIsDatesPanelOpen] = useState(false);
+  const [isCompletionCelebrating, setIsCompletionCelebrating] = useState(false);
   const [draftTitle, setDraftTitle] = useState(card.title);
   const quickEditRef = useRef(null);
+  const wasCompleteRef = useRef(Boolean(card.completed || card.done));
 
   useEffect(() => {
     setDraftTitle(card.title);
   }, [card.title]);
+
+  useEffect(() => {
+    const isCompleteNow = Boolean(card.completed || card.done);
+
+    if (isCompleteNow && !wasCompleteRef.current) {
+      setIsCompletionCelebrating(true);
+      const timeoutId = window.setTimeout(() => setIsCompletionCelebrating(false), 760);
+      wasCompleteRef.current = isCompleteNow;
+      return () => window.clearTimeout(timeoutId);
+    }
+
+    wasCompleteRef.current = isCompleteNow;
+    return undefined;
+  }, [card.completed, card.done]);
 
   useEffect(() => {
     if (!isQuickEditing) {
@@ -2224,6 +2257,12 @@ function InboxCard({
 
   const dueDateCard = { ...card, isCompleted: Boolean(card.isCompleted || card.dueDateCompleted) };
   const cardCover = typeof card.cover === 'object' ? card.cover : null;
+  const isComplete = Boolean(card.completed || card.done);
+  const completeButtonClassName = [
+    'inbox-complete-dot',
+    isComplete ? 'is-complete' : '',
+    isCompletionCelebrating ? 'is-celebrating' : ''
+  ].filter(Boolean).join(' ');
 
   if (isQuickEditing) {
     return (
@@ -2280,14 +2319,6 @@ function InboxCard({
         onDoubleClick={() => onInboxOpen(card.id)}
       >
         {cardCover && <CardCoverDisplay cover={cardCover} />}
-        <button
-          className={card.completed ? 'inbox-complete-dot is-complete' : 'inbox-complete-dot'}
-          aria-label="Mark complete"
-          onClick={(event) => {
-            event.stopPropagation();
-            onInboxCompleteToggle(card.id);
-          }}
-        />
         <div className="inbox-card-main">
           {card.labels?.length > 0 && (
             <div className="inbox-label-strip">
@@ -2297,7 +2328,18 @@ function InboxCard({
               })}
             </div>
           )}
-          <p className="inbox-card-title">{card.title}</p>
+          <div className="inbox-title-row">
+            <button
+              className={completeButtonClassName}
+              aria-label={isComplete ? 'Mark incomplete' : 'Mark complete'}
+              aria-pressed={isComplete}
+              onClick={(event) => {
+                event.stopPropagation();
+                onInboxCompleteToggle(card.id);
+              }}
+            />
+            <p className={isComplete ? 'inbox-card-title is-done' : 'inbox-card-title'}>{card.title}</p>
+          </div>
           {card.dueDate && (
             <div className="inbox-due-row">
               <DueDateBadge
@@ -2307,7 +2349,7 @@ function InboxCard({
             </div>
           )}
         </div>
-        {card.completed && (
+        {isComplete && (
           <button
             className="inbox-archive-button"
             aria-label="Archive card"
@@ -3467,6 +3509,7 @@ function BoardCard({ card, listId, labels, onCardOpen, onCardDrop, onCardUpdate,
 
   const hasImageCover = cardCover?.type === 'image' || typeof card.cover === 'string';
   const hasSolidCover = cardCover?.type === 'color';
+  const isComplete = Boolean(card.completed || card.done);
   const boardCardClassName = [
     'board-card draggable-card',
     hasImageCover || hasSolidCover ? 'has-cover' : '',
@@ -3478,7 +3521,6 @@ function BoardCard({ card, listId, labels, onCardOpen, onCardDrop, onCardUpdate,
   return (
     <>
       <article className={boardCardClassName} data-board-card-id={card.id} draggable role="button" tabIndex="0" onPointerDown={(event) => event.stopPropagation()} onDragStart={handleDragStart} onDragOver={(event) => event.preventDefault()} onDrop={handleDrop} onClick={() => onCardOpen(card.id)} onKeyDown={(event) => event.key === 'Enter' && onCardOpen(card.id)}>
-      <button className={card.completed || card.done ? 'board-complete-dot is-complete' : 'board-complete-dot'} aria-label="Mark complete" onClick={handleCompleteClick} />
       {(card.completed || card.done) && (
         <button className="card-archive-button" aria-label="Archive card" onClick={handleArchiveClick}><ArchiveCardIcon /></button>
       )}
@@ -3486,7 +3528,10 @@ function BoardCard({ card, listId, labels, onCardOpen, onCardDrop, onCardUpdate,
       {cardCover && <CardCoverDisplay cover={cardCover} />}
       {!cardCover && typeof card.cover === 'string' && <CardCover variant={card.cover} />}
       {cardLabels}
-      <p className={card.completed || card.done ? 'card-title is-done' : 'card-title'}>{card.title}</p>
+      <div className="card-title-row">
+        <button className={isComplete ? 'board-complete-dot is-complete' : 'board-complete-dot'} aria-label={isComplete ? 'Mark incomplete' : 'Mark complete'} aria-pressed={isComplete} onClick={handleCompleteClick} />
+        <p className={isComplete ? 'card-title is-done' : 'card-title'}>{card.title}</p>
+      </div>
       {card.dueDate && (
         <div className="card-meta-row">
           <DueDateBadge
