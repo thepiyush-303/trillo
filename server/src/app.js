@@ -30,7 +30,6 @@ export function createApp() {
   app.use("/api", healthRouter);
   app.use("/api", boardsRouter);
   app.use("/api", inboxRouter);
-  app.use("/api", userRouter);
 
   return app;
 }
