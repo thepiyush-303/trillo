@@ -96,3 +96,7 @@ create index if not exists card_members_member_idx on card_members(member_id);
 create index if not exists checklists_card_position_idx on checklists(card_id, position);
 create index if not exists checklist_items_checklist_position_idx on checklist_items(checklist_id, position);
 create index if not exists inbox_cards_position_idx on inbox_cards(position);
+-- File summary:
+-- - Initial database schema migration.
+-- - Creates boards, lists, cards, labels, checklists, checklist items, and inbox cards.
+-- - Foundation migration used by all later schema changes.

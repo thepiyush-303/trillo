@@ -20,3 +20,7 @@ values
   ('label-red-dark', '', '#7f1d1d', 4000),
   ('label-purple', '', '#7e3fa3', 5000)
 on conflict (id) do nothing;
+-- File summary:
+-- - Inbox labels schema migration.
+-- - Adds label storage and card label metadata for Inbox workflows.
+-- - Used by Inbox label selection and label persistence.

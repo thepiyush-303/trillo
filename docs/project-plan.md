@@ -442,3 +442,9 @@ These are intentionally out of scope for the first core build:
 - Include a basic functional Inbox in the first implementation.
 - Use the dark Trello-like board screenshot as the visual target.
 - The UI should resemble Trello's layout and interaction patterns without copying proprietary assets or branding.
+<!--
+File summary:
+- Project planning document.
+- Tracks feature goals, implementation phases, and product direction.
+- Use this for roadmap-level context.
+-->

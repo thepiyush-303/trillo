@@ -15,4 +15,3 @@ async function getHealth(_request, response) {
 }
 
 healthRouter.get('/health', getHealth);
-

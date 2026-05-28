@@ -13,4 +13,9 @@ function bootstrapApp() {
 }
 
 bootstrapApp();
-
+/*
+File summary:
+- Frontend entry point for mounting React.
+- Creates the root React tree and renders App into the HTML root element.
+- Use for global providers or app-wide bootstrapping.
+*/

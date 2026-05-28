@@ -15,3 +15,7 @@ from cards
 join lists on lists.id = cards.list_id
 where cards.archived = true
 on conflict (card_id) do nothing;
+-- File summary:
+-- - Archived cards schema migration.
+-- - Creates durable archive records for board cards.
+-- - Used by archive, restore, and archived-card listing flows.

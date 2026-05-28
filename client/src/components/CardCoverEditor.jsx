@@ -140,3 +140,9 @@ function CardCoverEditor({ card, onSave, onRemove, onClose }) {
 }
 
 export default CardCoverEditor;
+/*
+File summary:
+- Popover/editor for selecting or removing card covers.
+- Manages cover draft state, image/color choices, and save/remove callbacks.
+- Used by quick editors and modal card editing flows.
+*/

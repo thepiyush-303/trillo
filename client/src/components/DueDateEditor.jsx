@@ -273,3 +273,9 @@ function DueDateEditor({ card, onClose, onSave, onRemove, placement = 'modal' })
 }
 
 export default DueDateEditor;
+/*
+File summary:
+- Due-date editor popover/modal component.
+- Manages date, time, reminder, recurrence, and completion draft values.
+- Used by cards that support scheduling metadata.
+*/

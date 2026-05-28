@@ -111,3 +111,9 @@ function ListCarousel({ lists, activeListIndex = 0, onListChange }) {
 }
 
 export default ListCarousel;
+/*
+File summary:
+- Reusable carousel for navigating board lists.
+- Tracks scroll/active list state and exposes list-change interactions.
+- Use when a compact list-switching UI is needed.
+*/

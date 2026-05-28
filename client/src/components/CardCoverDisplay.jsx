@@ -57,3 +57,9 @@ function CardCoverDisplay({ cover }) {
 }
 
 export default CardCoverDisplay;
+/*
+File summary:
+- Reusable card cover renderer.
+- Displays image covers and solid color covers from stored cover metadata.
+- Used by inbox cards, board cards, and card detail views.
+*/

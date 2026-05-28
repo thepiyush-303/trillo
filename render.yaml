@@ -21,3 +21,7 @@ services:
 databases:
   - name: trello-kanban-db
     plan: free
+# File summary:
+# - Render deployment configuration for the backend service.
+# - Defines hosting behavior used outside local development.
+# - Use when deploying the API/server environment.

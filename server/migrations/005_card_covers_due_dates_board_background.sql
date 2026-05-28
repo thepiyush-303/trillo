@@ -18,3 +18,7 @@ alter table inbox_cards
   add column if not exists cover jsonb;
 
 create index if not exists inbox_cards_due_date_idx on inbox_cards(due_date);
+-- File summary:
+-- - Card cover, due date, and board background migration.
+-- - Adds cover JSON, scheduling fields, and board background metadata.
+-- - Used by cover editors, due-date UI, and board background customization.

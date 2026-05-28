@@ -161,3 +161,9 @@ export function isToday(dateValue) {
   const today = new Date().toISOString().split('T')[0];
   return dateValue === today;
 }
+/*
+File summary:
+- Date and reminder utilities used by due-date UI.
+- Formats dates/times and computes badge styles for overdue/upcoming states.
+- Use this to keep date parsing and display rules consistent.
+*/

@@ -113,4 +113,9 @@ seedDatabase().catch((error) => {
   console.error(error);
   process.exitCode = 1;
 });
-
+/*
+File summary:
+- Demo database seed script.
+- Clears and inserts sample boards, lists, cards, labels, and inbox data.
+- Used by npm run db:seed for local reset/demo data.
+*/

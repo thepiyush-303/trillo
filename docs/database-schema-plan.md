@@ -250,3 +250,9 @@ Before coding the API, verify these workflows against the schema:
 - No user authentication in the first schema version.
 - Member assignment uses seeded `members`.
 - Cards are archived with an `archived` boolean instead of being physically deleted by default.
+<!--
+File summary:
+- Database schema planning document.
+- Captures intended schema direction and implementation notes.
+- Use this when evaluating future persistence changes.
+-->

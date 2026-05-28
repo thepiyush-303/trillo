@@ -189,7 +189,7 @@ Relationships:
 
 - Belongs to one `board`.
 - Attached to cards through `card_labels`.
-
+   
 Indexes:
 
 - `labels_board_idx` on `(board_id)`.
@@ -476,7 +476,7 @@ Inbox routes:
 
 2. Members are only partially implemented.
    `members` and `card_members` exist, but card assignment APIs are not active. If the UI will support assigned members, those endpoints and board payloads should be completed.
-                                       
+
 3. Checklists are present but unused.
    `checklists` and `checklist_items` exist in the schema, but there are no current routes or board query hydration for them. A card detail redesign can use these tables, but backend support still needs to be added.
 
@@ -491,4 +491,9 @@ Inbox routes:
 
 7. Archive state uses both a boolean and metadata table.
    `cards.archived` controls active visibility, while `archived_cards` stores restore metadata. These two should stay in sync.
-
+<!--
+File summary:
+- Current database design documentation.
+- Explains tables, relationships, and persistence decisions.
+- Use this when changing schema or API behavior.
+-->

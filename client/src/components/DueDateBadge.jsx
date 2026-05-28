@@ -43,3 +43,9 @@ function DueDateBadge({ card, onEditDueDate }) {
 }
 
 export default DueDateBadge;
+/*
+File summary:
+- Compact due-date badge component.
+- Displays date status styling and opens editing when clicked.
+- Used on inbox cards, board cards, and detail surfaces.
+*/

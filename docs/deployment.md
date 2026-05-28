@@ -57,3 +57,9 @@ npm run dev:client
 ```
 
 Check the API at `http://localhost:4000/api/health`.
+<!--
+File summary:
+- Deployment documentation.
+- Explains production hosting configuration and environment requirements.
+- Use this when deploying or troubleshooting hosted environments.
+-->
